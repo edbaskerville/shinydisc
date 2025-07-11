@@ -10,30 +10,24 @@
 
   <body>
     <main class="container">
-      <h1>Welcome to Tauri</h1>
+      <h1>shinydisc: sync your brightwheel photos</h1>
 
-      <div class="row">
-        <a href="https://tauri.app" target="_blank">
-          <img src="/assets/tauri.svg" class="logo tauri" alt="Tauri logo" />
-        </a>
-        <a
-          href="https://developer.mozilla.org/en-US/docs/Web/JavaScript"
-          target="_blank"
-        >
-          <img
-            src="/assets/javascript.svg"
-            class="logo vanilla"
-            alt="JavaScript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
-
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
+      <form id="login-form">
+        <p class="row">
+          <input id="username-input" placeholder="Username" />
+          <input id="password-input" type="password" placeholder="Password" />
+        </p>
+        <p class="row">
+          <input id="student-input" placeholder="Student Name" />
+        </p>
+        <p class="row">
+          <input id="mfa-input" placeholder="2-factor code (email)" enabled="false" />
+        </p>
+        <p class="row">
+          <button type="submit">Log In</button>
+        </p>
       </form>
-      <p id="greet-msg"></p>
+      <p id="login-msg"></p>
     </main>
   </body>
 </html>

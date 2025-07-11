@@ -1,18 +1,18 @@
 const { invoke } = window.__TAURI__.core;
 
-let greetInputEl;
-let greetMsgEl;
+let studentInputEl;
+let loginMsgEl;
 
-async function greet() {
+async function login() {
   // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  greetMsgEl.textContent = await invoke("greet", { name: greetInputEl.value });
+  loginMsgEl.textContent = await invoke("login", { name: studentInputEl.value });
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  greetInputEl = document.querySelector("#greet-input");
-  greetMsgEl = document.querySelector("#greet-msg");
-  document.querySelector("#greet-form").addEventListener("submit", (e) => {
+  studentInputEl = document.querySelector("#student-input");
+  loginMsgEl = document.querySelector("#login-msg");
+  document.querySelector("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    greet();
+    login();
   });
 });
