@@ -26,6 +26,14 @@
   text-align: center;
 }
 
+.tab-visible {
+  display: block;
+}
+
+.tab-hidden {
+  display: none;
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;

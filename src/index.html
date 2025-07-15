@@ -12,21 +12,42 @@
     <main class="container">
       <h1>shinydisc: sync your brightwheel photos</h1>
 
-      <form id="login-form">
-        <p class="row">
-          <input id="username-input" placeholder="Username" />
-          <input id="password-input" type="password" placeholder="Password" />
-        </p>
-        <p class="row">
-          <input id="student-input" placeholder="Student Name" />
-        </p>
-        <p class="row">
-          <input id="mfa-input" placeholder="2-factor code (email)" enabled="false" />
-        </p>
-        <p class="row">
-          <button type="submit">Log In</button>
-        </p>
-      </form>
+      <div class="tab-visible">
+        <form id="login-form">
+          <p class="row">
+            <input id="email-input" placeholder="Email" />
+            <input id="password-input" type="password" placeholder="Password" />
+          </p>
+          <p class="row">
+            <input id="student-input" placeholder="Student Name" />
+          </p>
+          <p class="row">
+            <button type="submit">Log In</button>
+          </p>
+        </form>
+      </div>
+      <div class="tab-hidden">
+        <form id="mfa-form"
+          <p class="row">
+            <input id="mfa-input" placeholder="2-factor code (email)" enabled="false" />
+          </p>
+          <p class="row">
+            <button type="submit">Submit</button>
+          </p>
+        </form>
+      </div>
+
+      <div class="tab-hidden">
+        <form id="mfa-form"
+          <p class="row">
+            <input id="mfa-input" placeholder="2-factor code (email)" enabled="false" />
+          </p>
+          <p class="row">
+            <button type="submit">Sync</button>
+          </p>
+        </form>
+      </div>
+
       <p id="login-msg"></p>
     </main>
   </body>
