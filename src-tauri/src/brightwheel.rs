@@ -20,6 +20,7 @@ const AUTH_HEADERS_JSON: &str = r#"{
 use reqwest::{
     blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
+use serde_json::{json, Value};
 
 pub struct BrightwheelClient {
     client: Client,
@@ -51,37 +52,37 @@ impl BrightwheelClient {
         }
     }
 
-    pub fn authenticate_email_password(&self, email: &str, password: &str) -> Response {
+    pub fn post_sessions_start(&self, email: &str, password: &str) -> Response {
         let request = self.client.post(
             format!("{}/sessions/start", URL_BASE)
         )
             .headers(self.auth_headers.clone())
-            .json(&Self::authentication_map(email, password, None))
+            .json(&Self::authentication_json(email, password, None))
             .build().unwrap();
         self.client.execute(request).unwrap()
     }
 
-    pub fn authenticate_mfa(&self, email: &str, password: &str, mfa_code_opt: Option<&str>) {
+    pub fn post_sessions(&self, email: &str, password: &str, mfa_code_opt: Option<&str>) -> Response {
         let request = self.client.post(
             format!("{}/sessions", URL_BASE)
         )
             .headers(self.auth_headers.clone())
-            .json(&Self::authentication_map(email, password, mfa_code_opt))
+            .json(&Self::authentication_json(email, password, mfa_code_opt))
             .build().unwrap();
-        self.client.execute(request).unwrap();
+        self.client.execute(request).unwrap()
     }
 
-    fn authentication_map(email: &str, password: &str, mfa_code_opt: Option<&str>) -> HashMap<String, HashMap<String, String>> {
-        let mut map = hash_map! {
-            "email".to_string() => email.to_string(),
-            "password".to_string() => password.to_string(),
-        };
+    fn authentication_json(email: &str, password: &str, mfa_code_opt: Option<&str>) -> Value {
+        let mut json_val = json!({
+            "user" : {
+                "email" : email,
+                "password" : password
+            }
+        });
+        
         if let Some(mfa_code) = mfa_code_opt {
-            map.insert("2fa_code".to_string(), mfa_code.to_string());
+            json_val.as_object_mut().unwrap().insert("2fa_code".into(), mfa_code.into());
         }
-
-        hash_map!{
-            "user".to_string() => map
-        }
+        json_val
     }
 }

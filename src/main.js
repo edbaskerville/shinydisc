@@ -3,6 +3,8 @@ const { invoke } = window.__TAURI__.core;
 let emailInput;
 let pwInput;
 let loginMsgEl;
+let mfaInput;
+let mfaMsgEl;
 
 function setTab(targetTabName) {
   for(let tabName of ["login", "mfa", "loggedin"]) {
@@ -19,20 +21,35 @@ function setTab(targetTabName) {
 }
 
 async function login() {
-  // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-  let loginResult = await invoke("login", { email: emailInput.value, password: pwInput.value });
-  if(loginResult.message) {
-    loginMsgEl.textContent = loginResult.message;
+  let result = await invoke("login", { email: emailInput.value, password: pwInput.value });
+  console.log("login result:", result);
+  if(result.message) {
+    loginMsgEl.textContent = result.message;
   }
-  setTab(loginResult.tab_name);
+  setTab(result.tab_name);
+}
+
+async function login_mfa() {
+  let result = await invoke("login_mfa", { email: emailInput.value, password: pwInput.value, mfaCode: mfaInput.value });
+  console.log("login_mfa result:", result);
+  if(result.message) {
+    mfaMsgEl.textContent = result.message;
+  }
+  setTab(result.tab_name);
 }
 
 window.addEventListener("DOMContentLoaded", () => {
   emailInput = document.querySelector("#email-input");
   pwInput = document.querySelector("#password-input");
+  mfaInput = document.querySelector("#mfa-input");
   loginMsgEl = document.querySelector("#login-error-p");
+  mfaMsgEl = document.querySelector("#mfa-error-p");
   document.querySelector("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
     login();
+  });
+  document.querySelector("#mfa-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    login_mfa();
   });
 });
