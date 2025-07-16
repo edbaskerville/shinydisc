@@ -12,7 +12,7 @@
     <main class="container">
       <h1>shinydisc: sync your brightwheel photos</h1>
 
-      <div class="tab-visible">
+      <div class="tab-visible" id="login-tab">
         <form id="login-form">
           <p class="row">
             <input id="email-input" placeholder="Email" />
@@ -24,9 +24,11 @@
           <p class="row">
             <button type="submit">Log In</button>
           </p>
+          
+          <p class="error" id="login-error-p"></p>
         </form>
       </div>
-      <div class="tab-hidden">
+      <div class="tab-hidden" id="mfa-tab">
         <form id="mfa-form"
           <p class="row">
             <input id="mfa-input" placeholder="2-factor code (email)" enabled="false" />
@@ -37,18 +39,13 @@
         </form>
       </div>
 
-      <div class="tab-hidden">
-        <form id="mfa-form"
-          <p class="row">
-            <input id="mfa-input" placeholder="2-factor code (email)" enabled="false" />
-          </p>
+      <div class="tab-hidden" id="loggedin-tab">
+        <form id="loggedin-form"
           <p class="row">
             <button type="submit">Sync</button>
           </p>
         </form>
       </div>
-
-      <p id="login-msg"></p>
     </main>
   </body>
 </html>

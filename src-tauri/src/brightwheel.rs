@@ -18,16 +18,15 @@ const AUTH_HEADERS_JSON: &str = r#"{
 }"#;
 
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT},
-    blocking::Client
+    blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
 
-pub struct Brightwheel {
+pub struct BrightwheelClient {
     client: Client,
     auth_headers: HeaderMap,
 }
 
-impl Brightwheel {
+impl BrightwheelClient {
     pub fn new() -> Self {
         let client = Client::builder()
             .cookie_store(true).build().unwrap();
@@ -52,20 +51,19 @@ impl Brightwheel {
         }
     }
 
-    pub fn authenticate_email_password(&self, email: &str, password: &str) {
+    pub fn authenticate_email_password(&self, email: &str, password: &str) -> Response {
         let request = self.client.post(
             format!("{}/sessions/start", URL_BASE)
         )
             .headers(self.auth_headers.clone())
             .json(&Self::authentication_map(email, password, None))
             .build().unwrap();
-        let response = self.client.execute(request).unwrap();
-        println!("{}", response.text().unwrap());
+        self.client.execute(request).unwrap()
     }
 
     pub fn authenticate_mfa(&self, email: &str, password: &str, mfa_code_opt: Option<&str>) {
         let request = self.client.post(
-            format!("{}/sessions/start", URL_BASE)
+            format!("{}/sessions", URL_BASE)
         )
             .headers(self.auth_headers.clone())
             .json(&Self::authentication_map(email, password, mfa_code_opt))
