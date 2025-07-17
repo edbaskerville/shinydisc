@@ -8,7 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::{Builder, Manager, State};
 
-use crate::brightwheel::BrightwheelClient;
+use crate::brightwheel::{BrightwheelClient, Student};
 
 struct OuterAppState {
   state_opt: Option<AppState>,
@@ -234,7 +234,9 @@ fn sync(state_mutex: State<'_, Mutex<OuterAppState>>) -> SyncResult {
         println!("got user_id: {}", user_id);
 
         let students = bw_client.get_students(&user_id);
-        println!("{:?}", students);
+        for student in &students {
+            sync_student(bw_client, student)
+        }
 
         SyncResult {
             user_id: None,
@@ -244,6 +246,30 @@ fn sync(state_mutex: State<'_, Mutex<OuterAppState>>) -> SyncResult {
         SyncResult {
             user_id: None,
         }
+    }
+}
+
+fn sync_student(bw_client: &BrightwheelClient, student: &Student) {
+    let response = bw_client.get_students_activities(&student.object_id);
+    let json = response.json::<Value>().unwrap();
+    match &json {
+        Value::Object(obj) => {
+            println!("obj keys: {:?}", Vec::from_iter(obj.keys().into_iter()));
+
+            let page = obj.get("page").unwrap().as_i64().unwrap();
+            let page_size = obj.get("page_size").unwrap().as_i64().unwrap();
+            let offset = obj.get("offset").unwrap().as_i64().unwrap();
+            let count = obj.get("count").unwrap().as_i64().unwrap();
+            println!("page, page_size, offset, count: {}, {}, {}, {}", page, page_size, offset, count);
+
+            let activities = obj.get("activities").unwrap().as_array().unwrap();
+            println!("# activities: {}", activities.len());
+            for activity_val in activities {
+                let activity = activity_val.as_object().unwrap();
+                println!("activity keys: {:?}", Vec::from_iter(activity.keys().into_iter()));
+            }
+        },
+        _ => panic!()
     }
 }
 

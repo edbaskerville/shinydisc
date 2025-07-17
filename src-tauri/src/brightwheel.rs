@@ -32,9 +32,9 @@ pub struct BrightwheelClient {
 
 #[derive(Serialize, Debug)]
 pub struct Student {
-    object_id: String,
-    first_name: String,
-    last_name: String,
+    pub object_id: String,
+    pub first_name: String,
+    pub last_name: String,
 }
 
 impl BrightwheelClient {
@@ -151,6 +151,15 @@ impl BrightwheelClient {
                 _ => panic!()
             }
         )
+    }
+
+    pub fn get_students_activities(&self, student_id: &String) -> Response {
+        let request = self.client.get(
+            format!("{}/students/{}/activities", URL_BASE, student_id)
+        ).query(
+            &[("page_size", 10), ("offset", 0)]
+        ).build().unwrap();
+        self.client.execute(request).unwrap()
     }
 
     fn authentication_json(email: &str, password: &str, mfa_code_opt: Option<&str>) -> Value {
