@@ -20,6 +20,11 @@ function setTab(targetTabName) {
   }
 }
 
+async function init_view() {
+  let result = await invoke("init_view");
+  setTab(result.tab_name);
+}
+
 async function login() {
   let result = await invoke("login", { email: emailInput.value, password: pwInput.value });
   console.log("login result:", result);
@@ -38,6 +43,11 @@ async function login_mfa() {
   setTab(result.tab_name);
 }
 
+async function sync() {
+  let result = await invoke("sync");
+  console.log("sync result:", result);
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   emailInput = document.querySelector("#email-input");
   pwInput = document.querySelector("#password-input");
@@ -52,4 +62,12 @@ window.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     login_mfa();
   });
+  document.querySelector("#loggedin-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    sync();
+  });
+
+  init_view().then(() => {
+    console.log("init_view returned");
+  })
 });

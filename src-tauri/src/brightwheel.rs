@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io::BufRead, sync::{Arc, Mutex}};
 
 use map_macro::hash_map;
 
@@ -18,19 +18,26 @@ const AUTH_HEADERS_JSON: &str = r#"{
 }"#;
 
 use reqwest::{
-    blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
+    blocking::{Client, Response}, cookie::{Jar}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
+use reqwest_cookie_store::CookieStoreMutex;
 use serde_json::{json, Value};
 
 pub struct BrightwheelClient {
     client: Client,
+    pub cookie_store_arc_mutex: Arc<CookieStoreMutex>,
     auth_headers: HeaderMap,
 }
 
 impl BrightwheelClient {
-    pub fn new() -> Self {
+    pub fn new(cookie_store: reqwest_cookie_store::CookieStore) -> Self {
+        let cookie_store_arc_mutex = Arc::new(
+            CookieStoreMutex::new(cookie_store)
+        );
+
         let client = Client::builder()
-            .cookie_store(true).build().unwrap();
+            .cookie_provider(std::sync::Arc::clone(&cookie_store_arc_mutex))
+            .build().unwrap();
         let auth_headers = HeaderMap::from_iter(vec![
             (CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap()),
             (
@@ -48,6 +55,7 @@ impl BrightwheelClient {
 
         Self {
             client,
+            cookie_store_arc_mutex,
             auth_headers,
         }
     }
@@ -69,6 +77,11 @@ impl BrightwheelClient {
             .headers(self.auth_headers.clone())
             .json(&Self::authentication_json(email, password, mfa_code_opt))
             .build().unwrap();
+        self.client.execute(request).unwrap()
+    }
+
+    pub fn get_users_me(&self) -> Response {
+        let request = self.client.get(format!("{}/users/me", URL_BASE)).build().unwrap();
         self.client.execute(request).unwrap()
     }
 
