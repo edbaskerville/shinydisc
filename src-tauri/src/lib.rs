@@ -5,6 +5,7 @@ use std::{ops::Deref, sync::{Arc, Mutex}};
 
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{Builder, Manager, State};
 
 use crate::brightwheel::BrightwheelClient;
@@ -226,10 +227,15 @@ struct SyncResult {
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn sync(state_mutex: State<'_, Mutex<OuterAppState>>) -> SyncResult {
-    if let AppState::LoggedIn(loggedInState) = state_mutex.lock().unwrap().state_opt.as_ref().unwrap() {
-        let response = loggedInState.bw_client.get_users_me();
-        println!("response text: {}", response.text().unwrap());
+    if let AppState::LoggedIn(logged_in_state) = state_mutex.lock().unwrap().state_opt.as_ref().unwrap() {
+        let bw_client = &logged_in_state.bw_client;
         
+        let user_id = bw_client.get_user_id();
+        println!("got user_id: {}", user_id);
+
+        let students = bw_client.get_students(&user_id);
+        println!("{:?}", students);
+
         SyncResult {
             user_id: None,
         }

@@ -21,12 +21,20 @@ use reqwest::{
     blocking::{Client, Response}, cookie::{Jar}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
 use reqwest_cookie_store::CookieStoreMutex;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 pub struct BrightwheelClient {
     client: Client,
     pub cookie_store_arc_mutex: Arc<CookieStoreMutex>,
     auth_headers: HeaderMap,
+}
+
+#[derive(Serialize, Debug)]
+pub struct Student {
+    object_id: String,
+    first_name: String,
+    last_name: String,
 }
 
 impl BrightwheelClient {
@@ -83,6 +91,66 @@ impl BrightwheelClient {
     pub fn get_users_me(&self) -> Response {
         let request = self.client.get(format!("{}/users/me", URL_BASE)).build().unwrap();
         self.client.execute(request).unwrap()
+    }
+
+    pub fn get_user_id(&self) -> String {
+        let response = self.get_users_me();
+        let json = response.json::<Value>().unwrap();
+        println!("users/me json: {:?}", json);
+        match json {
+            Value::Object(obj) => {
+                match obj.get("object_id").unwrap() {
+                    Value::String(user_id) => user_id.clone(),
+                    _ => panic!()
+                }
+            },
+            _ => panic!()
+        }
+    }
+
+    pub fn get_guardians_students(&self, user_id: &String) -> Response {
+        let request = self.client.get(format!("{}/guardians/{}/students", URL_BASE, user_id)).build().unwrap();
+        self.client.execute(request).unwrap()
+    }
+
+    pub fn get_students(&self, user_id: &String) -> Vec<Student> {
+        let response = self.get_guardians_students(user_id);
+        let json = response.json::<Value>().unwrap();
+        println!("guardians/{}/students json: {:?}", user_id, json);
+
+        Vec::from_iter(
+            match &json {
+                Value::Object(obj) => {
+                    match obj.get("students").unwrap() {
+                        Value::Array(arr) => {
+                            arr.iter().map(|item| {
+                                match item {
+                                    Value::Object(item_obj) => {
+                                        let student_val = item_obj.get("student").unwrap();
+                                        match student_val {
+                                            Value::Object(student_obj) => {
+                                                let object_id = student_obj.get("object_id").unwrap().as_str().unwrap().into();
+                                                let first_name = student_obj.get("first_name").unwrap().as_str().unwrap().into();
+                                                let last_name = student_obj.get("last_name").unwrap().as_str().unwrap().into();
+                                                Student {
+                                                    object_id,
+                                                    first_name,
+                                                    last_name,
+                                                }
+                                            },
+                                            _ => panic!()
+                                        }
+                                    },
+                                    _ => panic!()
+                                }
+                            })
+                        },
+                        _ => panic!()
+                    }
+                },
+                _ => panic!()
+            }
+        )
     }
 
     fn authentication_json(email: &str, password: &str, mfa_code_opt: Option<&str>) -> Value {
