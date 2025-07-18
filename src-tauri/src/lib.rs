@@ -1,14 +1,19 @@
 
 pub mod brightwheel;
 
-use std::{ops::Deref, sync::{Arc, Mutex}};
+use std::{fs, ops::Deref, path::{Path, PathBuf}, sync::{Arc, Mutex}};
 
+use jiff::{civil::Time, Timestamp};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tauri::{Builder, Manager, State};
 
 use crate::brightwheel::{BrightwheelClient, Student};
+
+fn to_json_debug<S: Serialize>(x: &S) -> String {
+    serde_json::to_string_pretty(x).unwrap()
+}
 
 struct OuterAppState {
   state_opt: Option<AppState>,
@@ -250,27 +255,127 @@ fn sync(state_mutex: State<'_, Mutex<OuterAppState>>) -> SyncResult {
 }
 
 fn sync_student(bw_client: &BrightwheelClient, student: &Student) {
-    let response = bw_client.get_students_activities(&student.object_id);
-    let json = response.json::<Value>().unwrap();
-    match &json {
-        Value::Object(obj) => {
-            println!("obj keys: {:?}", Vec::from_iter(obj.keys().into_iter()));
+    println!("sync_student: {} {}", student.first_name, student.last_name);
 
-            let page = obj.get("page").unwrap().as_i64().unwrap();
-            let page_size = obj.get("page_size").unwrap().as_i64().unwrap();
-            let offset = obj.get("offset").unwrap().as_i64().unwrap();
-            let count = obj.get("count").unwrap().as_i64().unwrap();
-            println!("page, page_size, offset, count: {}, {}, {}, {}", page, page_size, offset, count);
-
-            let activities = obj.get("activities").unwrap().as_array().unwrap();
-            println!("# activities: {}", activities.len());
-            for activity_val in activities {
-                let activity = activity_val.as_object().unwrap();
-                println!("activity keys: {:?}", Vec::from_iter(activity.keys().into_iter()));
-            }
-        },
-        _ => panic!()
+    let student_path = PathBuf::from(format!("{} {}", student.first_name, student.last_name));
+    if !student_path.exists() {
+        std::fs::create_dir(&student_path).unwrap();
     }
+
+    let page_size: usize = 1000;
+    let mut page: usize = 0;
+
+    while download_activities(bw_client, student, page_size, page, &student_path) {
+        page += 1;
+    }
+}
+
+fn download_activities(bw_client: &BrightwheelClient, student: &Student, page_size: usize, page: usize, path: &PathBuf) -> bool {
+    println!("download_activities: {} {}, page {}", student.first_name, student.last_name, page);
+
+    let response_json = bw_client.get_students_activities(
+        &student.object_id, page_size, page
+    ).json::<Value>().unwrap();
+    let response_obj = response_json.as_object().unwrap();
+    println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
+
+    let page = response_obj.get("page").unwrap().as_u64().unwrap() as usize;
+    let page_size = response_obj.get("page_size").unwrap().as_u64().unwrap() as usize;
+    println!("page, page_size: {}, {}", page, page_size);
+
+    let activities = response_obj.get("activities").unwrap().as_array().unwrap();
+    println!("# activities: {}", activities.len());
+    for (i, activity_val) in activities.iter().enumerate() {
+        let activity = activity_val.as_object().unwrap();
+        println!("page {}, item {}", page, i);
+        println!("activity keys: {:?}", Vec::from_iter(activity.keys().into_iter()));
+        if activity.get("media").unwrap().is_object() {
+            println!("found media");
+            download_photo(bw_client, student, path, activity);
+        }
+        else if activity.get("video_info").unwrap().is_object() {
+            println!("found video_info");
+            download_video(bw_client, student, path, activity);
+        }
+        // println!("activity keys: {:?}", Vec::from_iter(activity.keys().into_iter()));
+        // println!("activity: {:?}", activity);
+
+        // if(i > 10) {
+        //     break;
+        // }
+    }
+
+    activities.len() == page_size
+}
+
+fn download_photo(bw_client: &BrightwheelClient, student: &Student, path: &PathBuf, activity: &Map<String, Value>) {
+    let timestamp = get_created_at(activity);
+    let object_id = get_object_id(activity);
+    let month_path = create_month_path(path, &timestamp);
+    let photo_info = activity.get("media").unwrap().as_object().unwrap();
+    // println!("{}\n", to_json_debug(photo_info));
+
+    let src_url = reqwest::Url::parse(photo_info.get("image_url").unwrap().as_str().unwrap()).unwrap();
+    let filename = format_filename(&timestamp, &object_id, "jpg");
+    let dst_path = month_path.join(filename);
+
+    println!("{:?}", dst_path);
+    if dst_path.exists() {
+        println!("...already exists; skipping");
+    }
+    else {
+        println!("...downloading...");
+        bw_client.download_file(&src_url, &dst_path);
+        println!("...done.");
+    }
+}
+
+fn download_video(bw_client: &BrightwheelClient, student: &Student, path: &PathBuf, activity: &Map<String, Value>) {
+    let timestamp = get_created_at(activity);
+    let object_id = get_object_id(activity);
+    let month_path = create_month_path(path, &timestamp);
+    let video_info = activity.get("video_info").unwrap().as_object().unwrap();
+    println!("{}\n", to_json_debug(video_info));
+
+    let src_url = reqwest::Url::parse(video_info.get("downloadable_url").unwrap().as_str().unwrap()).unwrap();
+    let filename = format_filename(&timestamp, &object_id, "mp4");
+    let dst_path = month_path.join(filename);
+
+    println!("{:?}", dst_path);
+    if dst_path.exists() {
+        println!("...already exists; skipping");
+    }
+    else {
+        println!("...downloading...");
+        bw_client.download_file(&src_url, &dst_path);
+        println!("...done.");
+    }
+}
+
+
+fn format_filename(timestamp: &Timestamp, object_id: &str, extension: &str) -> String {
+    format!("{}-{}.{}", timestamp.strftime("%F-%H%M%S").to_string(), object_id, extension)
+}
+
+fn get_object_id(obj: &Map<String, Value>) -> String {
+    obj.get("object_id").unwrap().as_str().unwrap().into()
+}
+
+fn get_created_at(obj: &Map<String, Value>) -> Timestamp {
+    obj.get("created_at").unwrap().as_str().unwrap().parse().unwrap()
+}
+
+fn get_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
+    let month_str = ts.strftime("%Y-%m").to_string();
+    path.join(month_str)
+}
+
+fn create_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
+    let month_path = get_month_path(path, ts);
+    if !month_path.exists() {
+        std::fs::create_dir(&month_path).unwrap();
+    }
+    month_path
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

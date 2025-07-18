@@ -25,3 +25,4 @@ serde_json = { version = "1", features = ["preserve_order"] }
 reqwest = { version = "0.12", features = ["json", "cookies", "blocking"] }
 map-macro = "0.3.0"
 reqwest_cookie_store = { version = "0.8.0" }
+jiff = "0.2"

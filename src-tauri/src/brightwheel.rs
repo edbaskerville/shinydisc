@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::BufRead, sync::{Arc, Mutex}};
+use std::{collections::HashMap, io::{BufRead, Read}, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 
 use map_macro::hash_map;
 
@@ -153,11 +153,11 @@ impl BrightwheelClient {
         )
     }
 
-    pub fn get_students_activities(&self, student_id: &String) -> Response {
+    pub fn get_students_activities(&self, student_id: &String, page_size: usize, page: usize) -> Response {
         let request = self.client.get(
             format!("{}/students/{}/activities", URL_BASE, student_id)
         ).query(
-            &[("page_size", 10), ("offset", 0)]
+            &[("page_size", page_size), ("page", page)]
         ).build().unwrap();
         self.client.execute(request).unwrap()
     }
@@ -174,5 +174,16 @@ impl BrightwheelClient {
             json_val.as_object_mut().unwrap().insert("2fa_code".into(), mfa_code.into());
         }
         json_val
+    }
+
+    pub fn download_file(&self, src_url: &reqwest::Url, dst_path: &PathBuf) {
+        let request = self.client.get(
+            src_url.clone()
+        ).timeout(
+            Duration::from_secs(100)
+        ).build().unwrap();
+        let mut file: std::fs::File = std::fs::File::create(dst_path).unwrap();
+        let mut response = self.client.execute(request).unwrap();
+        response.copy_to(&mut file).unwrap();
     }
 }
