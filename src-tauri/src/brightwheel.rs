@@ -68,7 +68,7 @@ impl BrightwheelClient {
         }
     }
 
-    pub fn post_sessions_start(&self, email: &str, password: &str) -> Response {
+    pub fn post_sessions_start(&self, email: String, password: String) -> Response {
         let request = self.client.post(
             format!("{}/sessions/start", URL_BASE)
         )
@@ -78,7 +78,7 @@ impl BrightwheelClient {
         self.client.execute(request).unwrap()
     }
 
-    pub fn post_sessions(&self, email: &str, password: &str, mfa_code_opt: Option<&str>) -> Response {
+    pub fn post_sessions(&self, email: String, password: String, mfa_code_opt: Option<String>) -> Response {
         let request = self.client.post(
             format!("{}/sessions", URL_BASE)
         )
@@ -94,7 +94,7 @@ impl BrightwheelClient {
     }
 
     pub fn get_user_id(&self) -> String {
-        let response = self.get_users_me();
+        let response: Response = self.get_users_me();
         let json = response.json::<Value>().unwrap();
         println!("users/me json: {:?}", json);
         match json {
@@ -108,13 +108,13 @@ impl BrightwheelClient {
         }
     }
 
-    pub fn get_guardians_students(&self, user_id: &String) -> Response {
+    pub fn get_guardians_students(&self, user_id: String) -> Response {
         let request = self.client.get(format!("{}/guardians/{}/students", URL_BASE, user_id)).build().unwrap();
         self.client.execute(request).unwrap()
     }
 
-    pub fn get_students(&self, user_id: &String) -> Vec<Student> {
-        let response = self.get_guardians_students(user_id);
+    pub fn get_students(&self, user_id: String) -> Vec<Student> {
+        let response = self.get_guardians_students(user_id.clone());
         let json = response.json::<Value>().unwrap();
         println!("guardians/{}/students json: {:?}", user_id, json);
 
@@ -153,7 +153,7 @@ impl BrightwheelClient {
         )
     }
 
-    pub fn get_students_activities(&self, student_id: &String, page_size: usize, page: usize) -> Response {
+    pub fn get_students_activities(&self, student_id: String, page_size: usize, page: usize) -> Response {
         let request = self.client.get(
             format!("{}/students/{}/activities", URL_BASE, student_id)
         ).query(
@@ -162,7 +162,7 @@ impl BrightwheelClient {
         self.client.execute(request).unwrap()
     }
 
-    fn authentication_json(email: &str, password: &str, mfa_code_opt: Option<&str>) -> Value {
+    fn authentication_json(email: String, password: String, mfa_code_opt: Option<String>) -> Value {
         let mut json_val = json!({
             "user" : {
                 "email" : email,

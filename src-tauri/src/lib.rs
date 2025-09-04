@@ -1,7 +1,7 @@
 
 pub mod brightwheel;
 
-use std::{fs, ops::Deref, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::{fs, ops::Deref, path::{Path, PathBuf}, sync::{Arc}};
 
 use jiff::{civil::Time, Timestamp};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -16,7 +16,22 @@ fn to_json_debug<S: Serialize>(x: &S) -> String {
 }
 
 struct OuterAppState {
-  state_opt: Option<AppState>,
+    bw_client_opt: Option<BrightwheelClient>,
+    state_opt: Option<AppState>,
+}
+
+impl OuterAppState {
+    pub fn remove(&mut self) -> (BrightwheelClient, AppState) {
+        (
+            self.bw_client_opt.take().unwrap(),
+            self.state_opt.take().unwrap(),
+        )
+    }
+
+    pub fn insert(&mut self, bw_client: BrightwheelClient, state: AppState) {
+        self.bw_client_opt = Some(bw_client);
+        self.state_opt = Some(state);
+    }
 }
 
 enum AppState {
@@ -26,19 +41,17 @@ enum AppState {
     Error(String),
 }
 
-struct StartState {
-    bw_client: BrightwheelClient
-}
+struct StartState {}
 
-fn complete_login(mut bw_client: BrightwheelClient, email: &str, password: &str, mfa_code_opt: Option<&str>) -> AppState {
-    let response = bw_client.post_sessions(email, password, mfa_code_opt);
+fn complete_login(bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> AppState {
+    let response = bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone());
     let response_json = response.json::<serde_json::Value>().unwrap();
     println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
     match response_json {
         serde_json::Value::Object(response_obj) => {
             write_cookies(&bw_client.cookie_store_arc_mutex);
 
-            AppState::LoggedIn(LoggedInState { bw_client })
+            AppState::LoggedIn(LoggedInState { })
         },
         _ => {
             AppState::Error("received non-object response from brightwheel login endpoint".into())
@@ -54,10 +67,8 @@ fn write_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
 }
 
 impl StartState {
-    fn login(self, email: &str, password: &str) -> AppState {
-        let bw_client = self.bw_client;
-
-        let response = bw_client.post_sessions_start(email, password);
+    fn login(self, bw_client: &BrightwheelClient, email: String, password: String) -> AppState {
+        let response = bw_client.post_sessions_start(email.clone(), password.clone());
         let response_json = response.json::<serde_json::Value>().unwrap();
         println!("/sessions/start response_json: {}\n", serde_json::to_string(&response_json).unwrap());
 
@@ -66,7 +77,7 @@ impl StartState {
                 if let Some(mfa_required_val) = response_obj.get("2fa_required") {
                     if let Some(mfa_required) = mfa_required_val.as_bool() {
                         if mfa_required {
-                            AppState::NeedsMfa(NeedsMfaState { bw_client })
+                            AppState::NeedsMfa(NeedsMfaState { })
                         }
                         else {
                             complete_login(bw_client, email, password, None)
@@ -78,7 +89,7 @@ impl StartState {
                 }
                 else {
                     // TODO: this might actually be a login failure
-                    AppState::LoggedIn(LoggedInState { bw_client })
+                    AppState::LoggedIn(LoggedInState { })
                 }
             }
             _ => {
@@ -89,28 +100,23 @@ impl StartState {
     }
 }
 
-struct NeedsMfaState {
-    bw_client: BrightwheelClient
-}
+struct NeedsMfaState { }
 
 impl NeedsMfaState {
-    fn complete_login(self, email: &str, password: &str, mfa_code: &str) -> AppState {
-        let bw_client = self.bw_client;
+    fn complete_login(self, bw_client: &BrightwheelClient, email: String, password: String, mfa_code: String) -> AppState {
         complete_login(bw_client, email, password, Some(mfa_code))
     }
 }
-struct LoggedInState {
-    bw_client: BrightwheelClient
-}
+struct LoggedInState { }
 
 #[derive(Serialize)]
-struct InitViewResult {
+struct InitViewResponse {
     tab_name: String,
 }
 
 #[tauri::command]
-fn init_view(state_mutex: State<'_, Mutex<OuterAppState>>) -> InitViewResult {
-    let outer_state = state_mutex.lock().unwrap();
+async fn init_view(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>) -> Result<InitViewResponse, ()> {
+    let outer_state = state_mutex.lock().await;
     let tab_name = if let Some(state) = &outer_state.state_opt {
         match state {
             AppState::Start(_) => "login",
@@ -122,139 +128,146 @@ fn init_view(state_mutex: State<'_, Mutex<OuterAppState>>) -> InitViewResult {
     else {
         "login"
     };
-    InitViewResult { tab_name: tab_name.into() }
+    Ok(InitViewResponse { tab_name: tab_name.into() })
 }
 
 #[derive(Serialize)]
-struct LoginResult {
+struct LoginResponse {
     message: Option<String>,
     tab_name: String,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-fn login(state_mutex: State<'_, Mutex<OuterAppState>>, email: &str, password: &str) -> LoginResult {
-    let mut outer_state = state_mutex.lock().unwrap();
+async fn login(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>, email: String, password: String) -> Result<LoginResponse, ()> {
+    let mut outer_state = state_mutex.lock().await;
+    let (mut bw_client, mut state) = outer_state.remove();
 
-    outer_state.state_opt = Some(if let Some(state) = outer_state.state_opt.take() {
-        match state {
-            AppState::Start(start_state) => {
-                start_state.login(email, password)
-            },
-            _ => AppState::Error("wrong state for login".into())
-        }
-    }
-    else {
-        AppState::Error("outer state is empty for some reason?".into())
-    });
+    (bw_client, state) = match state {
+        AppState::Start(start_state) => {
+            let handle = tokio::task::spawn_blocking(move || {
+                let state = start_state.login(&bw_client, email, password);
+                (bw_client, state)
+            });
+            handle.await.unwrap()
+        },
+        _ => (bw_client, AppState::Error("wrong state for login".into()))
+    };
 
-    if let Some(state) = &outer_state.state_opt {
-        match state {
-            AppState::Error(msg) => LoginResult {
-                message: Some(msg.clone()),
-                tab_name: "login".into(),
-            },
-            AppState::NeedsMfa(_) => LoginResult {
-                message: None,
-                tab_name: "mfa".into(),
-            },
-            AppState::LoggedIn(_) => LoginResult {
-                message: None,
-                tab_name: "loggedin".into(),
-            },
-            _ => LoginResult {
-                message: None,
-                tab_name: "login".into(),
-            }
-        }
-    }
-    else {
-        LoginResult {
-            message: Some("outer state is empty for some reason?".into()),
+    let response = match &state {
+        AppState::Error(msg) => LoginResponse {
+            message: Some(msg.clone()),
+            tab_name: "login".into(),
+        },
+        AppState::NeedsMfa(_) => LoginResponse {
+            message: None,
+            tab_name: "mfa".into(),
+        },
+        AppState::LoggedIn(_) => LoginResponse {
+            message: None,
+            tab_name: "loggedin".into(),
+        },
+        _ => LoginResponse {
+            message: None,
             tab_name: "login".into(),
         }
-    }
+    };
+    outer_state.insert(bw_client, state);
+    Ok(response)
 }
 
 #[derive(Serialize)]
-struct LoginMfaResult {
+struct LoginMfaResponse {
     message: Option<String>,
     tab_name: String,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-fn login_mfa(state_mutex: State<'_, Mutex<OuterAppState>>, email: &str, password: &str, mfa_code: &str) -> LoginMfaResult {
+async fn login_mfa(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>, email: String, password: String, mfa_code: String) -> Result<LoginMfaResponse, ()> {
     println!("login_mfa({}, ***, {})", email, mfa_code);
-    let mut outer_state = state_mutex.lock().unwrap();
+    let mut outer_state = state_mutex.lock().await;
+    let (mut bw_client, mut state) = outer_state.remove();
 
-    outer_state.state_opt = Some(if let Some(state) = outer_state.state_opt.take() {
-        match state {
-            AppState::NeedsMfa(needs_mfa_state) => {
-                needs_mfa_state.complete_login(email, password, mfa_code)
-            },
-            _ => AppState::Error("wrong state for login_mfa".into())
-        }
-    }
-    else {
-        AppState::Error("outer state is empty for some reason?".into())
-    });
+    // TODO: This pattern of extracting state probably assumes that no commands get executed in here.
+    // Probably need to restructure using a real message queue.
+    // Probably should receive messages on a normal thread to process the queue and avoid async ownership nonsense.
+    // As usual, weird code means you're doing something wrong.
+    // Wait, nevermind, we hold the lock the whole time.
+    // The locking implicitly creates a queue.
+    // Still, ugly.
 
-    if let Some(state) = &outer_state.state_opt {
-        match state {
-            AppState::Error(msg) => LoginMfaResult {
-                message: Some(msg.clone()),
-                tab_name: "mfa".into(),
-            },
-            AppState::LoggedIn(_) => LoginMfaResult {
-                message: None,
-                tab_name: "loggedin".into(),
-            },
-            _ => LoginMfaResult {
-                message: None,
-                tab_name: "mfa".into(),
-            }
-        }
-    }
-    else {
-        LoginMfaResult {
-            message: Some("outer state is empty for some reason?".into()),
+    (bw_client, state) = match state {
+        AppState::NeedsMfa(needs_mfa_state) => {
+            tokio::task::spawn_blocking(|| {
+                let state = needs_mfa_state.complete_login(&bw_client, email, password, mfa_code);
+                (bw_client, state)
+            }).await.unwrap()
+        },
+        _ => (bw_client, AppState::Error("wrong state for login_mfa".into()))
+    };
+
+    let response = match &state {
+        AppState::Error(msg) => LoginMfaResponse {
+            message: Some(msg.clone()),
+            tab_name: "mfa".into(),
+        },
+        AppState::LoggedIn(_) => LoginMfaResponse {
+            message: None,
+            tab_name: "loggedin".into(),
+        },
+        _ => LoginMfaResponse {
+            message: None,
             tab_name: "mfa".into(),
         }
-    }
+    };
+
+    outer_state.insert(bw_client, state);
+    Ok(response)
 }
 
 #[derive(Serialize)]
-struct SyncResult {
+struct SyncResponse {
     user_id: Option<String>,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-fn sync(state_mutex: State<'_, Mutex<OuterAppState>>) -> SyncResult {
-    if let AppState::LoggedIn(logged_in_state) = state_mutex.lock().unwrap().state_opt.as_ref().unwrap() {
-        let bw_client = &logged_in_state.bw_client;
+async fn sync(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>) -> Result<SyncResponse, ()> {
+    let response = {
+        let mut outer_state = state_mutex.lock().await;
+        let (mut bw_client, mut state) = outer_state.remove();
         
-        let user_id = bw_client.get_user_id();
+        let user_id;
+        (bw_client, user_id) = tokio::task::spawn_blocking(move || {
+            let user_id = bw_client.get_user_id();
+            (bw_client, user_id)
+        }).await.unwrap();
         println!("got user_id: {}", user_id);
 
-        let students = bw_client.get_students(&user_id);
-        for student in &students {
-            sync_student(bw_client, student)
+        let students;
+        let user_id_2 = user_id.clone();
+        (bw_client, students) = tokio::task::spawn_blocking(|| {
+            let students = bw_client.get_students(user_id_2);
+            (bw_client, students)
+        }).await.unwrap();
+        for student in students {
+            bw_client = tokio::task::spawn_blocking(move || {
+                sync_student(&bw_client, student);
+                bw_client
+            }).await.unwrap()
         }
 
-        SyncResult {
-            user_id: None,
+        outer_state.insert(bw_client, state);
+        SyncResponse {
+            user_id: Some(user_id),
         }
-    }
-    else {
-        SyncResult {
-            user_id: None,
-        }
-    }
+    };
+
+    Ok(response)
 }
 
-fn sync_student(bw_client: &BrightwheelClient, student: &Student) {
+fn sync_student(bw_client: &BrightwheelClient, student: Student) {
     println!("sync_student: {} {}", student.first_name, student.last_name);
 
     let student_path = PathBuf::from(format!("{} {}", student.first_name, student.last_name));
@@ -265,7 +278,7 @@ fn sync_student(bw_client: &BrightwheelClient, student: &Student) {
     let page_size: usize = 1000;
     let mut page: usize = 0;
 
-    while download_activities(bw_client, student, page_size, page, &student_path) {
+    while download_activities(bw_client, &student, page_size, page, &student_path) {
         page += 1;
     }
 }
@@ -274,7 +287,7 @@ fn download_activities(bw_client: &BrightwheelClient, student: &Student, page_si
     println!("download_activities: {} {}, page {}", student.first_name, student.last_name, page);
 
     let response_json = bw_client.get_students_activities(
-        &student.object_id, page_size, page
+        student.object_id.clone(), page_size, page
     ).json::<Value>().unwrap();
     let response_obj = response_json.as_object().unwrap();
     println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
@@ -380,31 +393,35 @@ fn create_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let start_state = {
+    
+
+    let outer_state = {
         if let Ok(file) = std::fs::File::open("cookies.json")
             .map(std::io::BufReader::new) {
             println!("Opened cookies.json");
 
-            AppState::LoggedIn(LoggedInState {
-                bw_client: brightwheel::BrightwheelClient::new(
+            OuterAppState {
+                bw_client_opt: Some(brightwheel::BrightwheelClient::new(
                     reqwest_cookie_store::CookieStore::load_json(file).unwrap()
-                )
-            })
+                )),
+                state_opt: Some(AppState::LoggedIn(LoggedInState { }))
+            }
         }
         else
         {
             println!("No cookies.json; using default cookie store");
-            AppState::Start(StartState {
-                bw_client: brightwheel::BrightwheelClient::new(reqwest_cookie_store::CookieStore::default())
-            })
+            OuterAppState {
+                bw_client_opt: Some(
+                    brightwheel::BrightwheelClient::new(reqwest_cookie_store::CookieStore::default())
+                ),
+                state_opt: Some(AppState::Start(StartState { }))
+            }
         }
     };
 
     Builder::default()
         .setup(|app| {
-            app.manage(Mutex::new(OuterAppState {
-                state_opt: Some(start_state)
-            }));
+            app.manage(tokio::sync::Mutex::new(outer_state));
             Ok(())            
         })
         .plugin(tauri_plugin_opener::init())
