@@ -1,13 +1,13 @@
 
 pub mod brightwheel;
 
-use std::{fs, ops::Deref, path::{Path, PathBuf}, sync::{Arc}};
+use std::{fs, ops::Deref, path::{Path, PathBuf}, sync::Arc, thread::JoinHandle};
 
 use jiff::{civil::Time, Timestamp};
 use reqwest_cookie_store::CookieStoreMutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{Builder, Manager, State};
+use tauri::{AppHandle, Builder, Emitter, Manager, State};
 
 use crate::brightwheel::{BrightwheelClient, Student};
 
@@ -393,7 +393,7 @@ fn create_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    
+    let (backend_sender, backend_receiver) = std::sync::mpsc::channel();
 
     let outer_state = {
         if let Ok(file) = std::fs::File::open("cookies.json")
@@ -419,13 +419,60 @@ pub fn run() {
         }
     };
 
-    Builder::default()
+    let app = Builder::default()
         .setup(|app| {
-            app.manage(tokio::sync::Mutex::new(outer_state));
+            app.manage(backend_sender);
             Ok(())            
         })
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![init_view, login, login_mfa, sync])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![send_backend_message]).build(
+            tauri::generate_context!()
+        )
+        .expect("error while building tauri application");
+    let app_handle = app.app_handle().clone();
+
+    spawn_backend(backend_receiver, app_handle);
+
+    app.run(|_app, _event| { });
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+enum BackendMessage {
+    Test,
+    Exit
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct TestEvent {
+    message: String
+}
+
+#[derive(Default)]
+struct MyState {
+  s: std::sync::Mutex<String>,
+  t: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+// remember to call `.manage(MyState::default())`
+#[tauri::command]
+fn send_backend_message(state: tauri::State<'_, std::sync::mpsc::Sender<BackendMessage>>) -> Result<(), String> {
+  state.send(BackendMessage::Test).unwrap();
+  Ok(())
+}
+
+
+fn spawn_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        loop {
+            match receiver.recv().unwrap() {
+                BackendMessage::Test => {
+                    app.emit("test-event", TestEvent {
+                        message: "Hello to frontend".into()
+                    }).unwrap()
+                },
+                BackendMessage::Exit => {
+                    break;
+                }
+            }
+        }
+    })
 }

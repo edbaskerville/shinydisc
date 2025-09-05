@@ -1,4 +1,5 @@
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 let emailInput;
 let pwInput;
@@ -19,6 +20,20 @@ function setTab(targetTabName) {
     }
   }
 }
+
+function test_backend_message() {
+  console.log("Got test_backend_message");
+  invoke("send_backend_message", {
+    "Test" : {}
+  })
+}
+
+listen('test-event', (event) => {
+  console.log(
+    `got test-event: ${event.payload}`
+  );
+  console.log(event.payload.message);
+});
 
 async function init_view() {
   let result = await invoke("init_view");
@@ -54,20 +69,25 @@ window.addEventListener("DOMContentLoaded", () => {
   mfaInput = document.querySelector("#mfa-input");
   loginMsgEl = document.querySelector("#login-error-p");
   mfaMsgEl = document.querySelector("#mfa-error-p");
-  document.querySelector("#login-form").addEventListener("submit", (e) => {
+  document.querySelector("#test-backend-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    login();
-  });
-  document.querySelector("#mfa-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    login_mfa();
-  });
-  document.querySelector("#loggedin-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    sync();
+    test_backend_message();
   });
 
-  init_view().then(() => {
-    console.log("init_view returned");
-  })
+//   document.querySelector("#login-form").addEventListener("submit", (e) => {
+//     e.preventDefault();
+//     login();
+//   });
+//   document.querySelector("#mfa-form").addEventListener("submit", (e) => {
+//     e.preventDefault();
+//     login_mfa();
+//   });
+//   document.querySelector("#loggedin-form").addEventListener("submit", (e) => {
+//     e.preventDefault();
+//     sync();
+//   });
+
+//   init_view().then(() => {
+//     console.log("init_view returned");
+//   })
 });
