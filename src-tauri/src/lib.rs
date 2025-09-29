@@ -18,7 +18,7 @@ enum BackendState {
     NeedsLogin(NeedsLoginState),
     NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
-    Syncing(SyncingState),
+    // Syncing(SyncingState),
     UnexpectedError(String),
 }
 
@@ -39,15 +39,15 @@ struct LoggedInState {
 
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct SyncingState {
-    student: Student,
-    num_pages: u64,
-    page_num: u64,
-    num_activities: u64,
-    activity_num: u64,
-    last_activity_name: Option<String>,
-}
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// struct SyncingState {
+//     student: Student,
+//     num_pages: u64,
+//     page_num: u64,
+//     num_activities: u64,
+//     activity_num: u64,
+//     last_activity_name: Option<String>,
+// }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct UnexpectedErrorState {
@@ -65,6 +65,7 @@ enum BackendMessage {
     LogInMfa {
         mfa_code: String,
     },
+    Sync,
     Exit
 }
 
@@ -115,6 +116,9 @@ fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHand
             },
             BackendMessage::LogInMfa { mfa_code } => {
                 state = log_in_mfa(&mut bw_client, state, mfa_code);
+            },
+            BackendMessage::Sync => {
+                state = sync(&mut bw_client, state);
             },
             BackendMessage::Exit => {
                 break;
@@ -236,54 +240,39 @@ fn complete_login(bw_client: &BrightwheelClient, email: String, password: String
     }
 }
 
+/*** SYNC ***/
 
-/*** UTILITY FUNCTIONS ***/
-
-fn write_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
-    let mut writer = std::fs::File::create("cookies.json")
-      .map(std::io::BufWriter::new)
-      .unwrap();
-    cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer);
+fn sync(bw_client: &mut BrightwheelClient, state: BackendState) -> BackendState {
+    match state {
+        BackendState::LoggedIn(logged_in_state) => {
+            logged_in_state.sync(bw_client)
+        },
+        _ => {
+            BackendState::UnexpectedError(format!("Unexpected state for sync: {:?}", state))
+        }
+    }
 }
 
-fn to_json_debug<S: Serialize>(x: &S) -> String {
-    serde_json::to_string_pretty(x).unwrap()
+impl LoggedInState {
+    fn sync(self, bw_client: &mut BrightwheelClient) -> BackendState {
+        sync_all(bw_client);
+        BackendState::LoggedIn(LoggedInState {  })
+    }
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn sync(state_mutex: State<'_, BackendSender>) -> Result<(), ()> {
-    // let response = {
-    //     let mut outer_state = state_mutex.lock().await;
-    //     let (mut bw_client, mut state) = outer_state.remove();
-          
-    //     let user_id;
-    //     (bw_client, user_id) = tokio::task::spawn_blocking(move || {
-    //         let user_id = bw_client.get_user_id();
-    //         (bw_client, user_id)
-    //     }).await.unwrap();
-    //     println!("got user_id: {}", user_id);
+fn sync_all(bw_client: &mut BrightwheelClient) {
+    // Get user_id
+    let user_id = bw_client.get_user_id();
+    println!("got user_id: {}", user_id);
 
-    //     let students;
-    //     let user_id_2 = user_id.clone();
-    //     (bw_client, students) = tokio::task::spawn_blocking(|| {
-    //         let students = bw_client.get_students(user_id_2);
-    //         (bw_client, students)
-    //     }).await.unwrap();
-    //     for student in students {
-    //         bw_client = tokio::task::spawn_blocking(move || {
-    //             sync_student(&bw_client, student);
-    //             bw_client
-    //         }).await.unwrap()
-    //     }
+    // Get list of students;
+    let user_id_2 = user_id.clone();
+    let students = bw_client.get_students(user_id_2);
 
-    //     outer_state.insert(bw_client, state);
-    //     SyncResponse {
-    //         user_id: Some(user_id),
-    //     }
-    // };
-
-    Ok(())
+    // Sync each student
+    for student in students {
+        sync_student(&bw_client, student);
+    }
 }
 
 fn sync_student(bw_client: &BrightwheelClient, student: Student) {
@@ -408,6 +397,20 @@ fn create_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
         std::fs::create_dir(&month_path).unwrap();
     }
     month_path
+}
+
+
+/*** UTILITY FUNCTIONS ***/
+
+fn write_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
+    let mut writer = std::fs::File::create("cookies.json")
+      .map(std::io::BufWriter::new)
+      .unwrap();
+    cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer);
+}
+
+fn to_json_debug<S: Serialize>(x: &S) -> String {
+    serde_json::to_string_pretty(x).unwrap()
 }
 
 fn init_cookie_store() -> (bool, reqwest_cookie_store::CookieStore) {

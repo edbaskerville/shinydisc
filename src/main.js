@@ -130,8 +130,9 @@ listen('login-mfa-response', (event) => {
 });
 
 function sync() {
-  let result = invoke("sync");
-  console.log("sync result:", result);
+  send_backend_message({
+    "Sync" : null
+  });
 }
 
 listen('sync-update', (event) => {
