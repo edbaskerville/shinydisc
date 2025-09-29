@@ -1,9 +1,9 @@
 
 pub mod brightwheel;
 
-use std::{fs, ops::Deref, path::{Path, PathBuf}, sync::Arc, thread::JoinHandle};
+use std::{path::{PathBuf}, sync::Arc};
 
-use jiff::{civil::Time, Timestamp};
+use jiff::{Timestamp};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -11,53 +11,233 @@ use tauri::{AppHandle, Builder, Emitter, Manager, State};
 
 use crate::brightwheel::{BrightwheelClient, Student};
 
-fn to_json_debug<S: Serialize>(x: &S) -> String {
-    serde_json::to_string_pretty(x).unwrap()
-}
+type BackendSender = std::sync::mpsc::Sender<BackendMessage>;
 
-struct OuterAppState {
-    bw_client_opt: Option<BrightwheelClient>,
-    state_opt: Option<AppState>,
-}
-
-impl OuterAppState {
-    pub fn remove(&mut self) -> (BrightwheelClient, AppState) {
-        (
-            self.bw_client_opt.take().unwrap(),
-            self.state_opt.take().unwrap(),
-        )
-    }
-
-    pub fn insert(&mut self, bw_client: BrightwheelClient, state: AppState) {
-        self.bw_client_opt = Some(bw_client);
-        self.state_opt = Some(state);
-    }
-}
-
-enum AppState {
-    Start(StartState),
+#[derive(Serialize, Deserialize, Debug, Clone)]
+enum BackendState {
+    NeedsLogin(NeedsLoginState),
     NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
-    Error(String),
+    Syncing(SyncingState),
+    UnexpectedError(String),
 }
 
-struct StartState {}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct NeedsLoginState {
+    message: Option<String>,
+}
 
-fn complete_login(bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> AppState {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct NeedsMfaState {
+    email: String,
+    password: String,
+    message: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct LoggedInState {
+
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct SyncingState {
+    student: Student,
+    num_pages: u64,
+    page_num: u64,
+    num_activities: u64,
+    activity_num: u64,
+    last_activity_name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct UnexpectedErrorState {
+    message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+enum BackendMessage {
+    Test,
+    RequestState,
+    LogIn {
+        email: String,
+        password: String,
+    },
+    LogInMfa {
+        mfa_code: String,
+    },
+    Exit
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let (backend_sender, backend_receiver) = std::sync::mpsc::channel();
+
+    let app = Builder::default()
+        .setup(|app| {
+            app.manage(backend_sender);
+            Ok(())            
+        })
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![send_backend_message]).build(
+            tauri::generate_context!()
+        )
+        .expect("error while building tauri application");
+    let app_handle = app.app_handle().clone();
+
+    std::thread::spawn(move || {
+        run_backend(backend_receiver, app_handle);
+    });
+    app.run(|_app, _event| { });
+}
+
+fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) {
+    let (already_logged_in, cookie_store) = init_cookie_store();
+    let mut bw_client = BrightwheelClient::new(cookie_store);
+    let mut state = if already_logged_in {
+        BackendState::LoggedIn(LoggedInState {  })
+    }
+    else {
+        BackendState::NeedsLogin(NeedsLoginState {
+            message: None
+        })
+    };
+
+    loop {
+        match receiver.recv().unwrap() {
+            BackendMessage::Test => {
+                respond_to_test_message(&app);
+            },
+            BackendMessage::RequestState => {
+                // state always updated below
+            },
+            BackendMessage::LogIn { email, password } => {
+                state = log_in(&mut bw_client, state, email, password);
+            },
+            BackendMessage::LogInMfa { mfa_code } => {
+                state = log_in_mfa(&mut bw_client, state, mfa_code);
+            },
+            BackendMessage::Exit => {
+                break;
+            }
+        }
+        update_state(&app, &state);
+    }
+}
+
+
+/*** ALL-PURPOSE BACKEND MESSAGING COMMAND ***/
+
+#[tauri::command]
+fn send_backend_message(sender: tauri::State<'_, BackendSender>, message: BackendMessage) -> Result<(), String> {
+  sender.send(message).unwrap();
+  Ok(())
+}
+
+
+/*** TEST REQUEST-RESPONSE ***/
+
+#[derive(Serialize, Deserialize, Clone)]
+struct TestEvent {
+    message: String
+}
+
+fn respond_to_test_message(app: &AppHandle) {
+    app.emit("test-event", TestEvent {
+        message: "Hello to frontend".into()
+    }).unwrap();
+}
+
+
+/*** FRONTEND STATE UPDATE ***/
+
+fn update_state(app: &AppHandle, state: &BackendState) {
+    app.emit("update-state", state.clone()).unwrap();
+}
+
+
+/*** LOGIN ***/
+
+fn log_in(bw_client: &mut BrightwheelClient, state: BackendState, email: String, password: String) -> BackendState {
+    match state {
+        BackendState::NeedsLogin(needs_login_state) => {
+            needs_login_state.log_in(bw_client, email, password)
+        },
+        _ => BackendState::UnexpectedError(
+            format!("Backend in unexpected state for login: {:?}", state)
+        )
+    }
+}
+
+impl NeedsLoginState {
+    fn log_in(self, bw_client: &mut BrightwheelClient, email: String, password: String) -> BackendState {
+        let response = bw_client.post_sessions_start(email.clone(), password.clone());
+        let response_json = response.json::<serde_json::Value>().unwrap();
+
+        match response_json {
+            serde_json::Value::Object(response_obj) => {
+                if let Some(mfa_required_val) = response_obj.get("2fa_required") {
+                    if let Some(mfa_required) = mfa_required_val.as_bool() {
+                        if mfa_required {
+                            BackendState::NeedsMfa(NeedsMfaState {
+                                email, password, message: None
+                            })
+                        }
+                        else {
+                            complete_login(bw_client, email, password, None)
+                        }
+                    }
+                    else {
+                        BackendState::UnexpectedError("2fa_required is not a bool???".into())
+                    }
+                }
+                else {
+                    // TODO: this might actually be a login failure
+                    BackendState::LoggedIn(LoggedInState {})
+                }
+            }
+            _ => {
+                BackendState::UnexpectedError("received non-object response from brightwheel login endpoint".into())
+            }
+        }
+    }
+}
+
+
+fn log_in_mfa(bw_client: &mut BrightwheelClient, state: BackendState, mfa_code: String) -> BackendState {
+    match state {
+        BackendState::NeedsMfa(needs_mfa_state) => {
+            needs_mfa_state.log_in_mfa(bw_client, mfa_code)
+        },
+        _ => BackendState::UnexpectedError(format!("Backend in unexpected state for mfa login: {:?}", state)),
+    }
+}
+
+impl NeedsMfaState {
+    fn log_in_mfa(self, bw_client: &mut BrightwheelClient, mfa_code: String) -> BackendState {
+        complete_login(bw_client, self.email, self.password, Some(mfa_code))
+    }
+}
+
+
+fn complete_login(bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> BackendState {
     let response = bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone());
     let response_json = response.json::<serde_json::Value>().unwrap();
     println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
     match response_json {
         serde_json::Value::Object(response_obj) => {
+            // TODO: could be invalid response??
             write_cookies(&bw_client.cookie_store_arc_mutex);
 
-            AppState::LoggedIn(LoggedInState { })
+            BackendState::LoggedIn(LoggedInState { })
         },
         _ => {
-            AppState::Error("received non-object response from brightwheel login endpoint".into())
+            BackendState::UnexpectedError("received non-object response from brightwheel login endpoint".into())
         }
     }
 }
+
+
+/*** UTILITY FUNCTIONS ***/
 
 fn write_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
     let mut writer = std::fs::File::create("cookies.json")
@@ -66,205 +246,44 @@ fn write_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
     cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer);
 }
 
-impl StartState {
-    fn login(self, bw_client: &BrightwheelClient, email: String, password: String) -> AppState {
-        let response = bw_client.post_sessions_start(email.clone(), password.clone());
-        let response_json = response.json::<serde_json::Value>().unwrap();
-        println!("/sessions/start response_json: {}\n", serde_json::to_string(&response_json).unwrap());
-
-        match response_json {
-            serde_json::Value::Object(response_obj) => {
-                if let Some(mfa_required_val) = response_obj.get("2fa_required") {
-                    if let Some(mfa_required) = mfa_required_val.as_bool() {
-                        if mfa_required {
-                            AppState::NeedsMfa(NeedsMfaState { })
-                        }
-                        else {
-                            complete_login(bw_client, email, password, None)
-                        }
-                    }
-                    else {
-                        AppState::Error("2fa_required is not a bool???".into())
-                    }
-                }
-                else {
-                    // TODO: this might actually be a login failure
-                    AppState::LoggedIn(LoggedInState { })
-                }
-            }
-            _ => {
-                AppState::Error("received non-object response from brightwheel login endpoint".into())
-            }
-        }
-        
-    }
-}
-
-struct NeedsMfaState { }
-
-impl NeedsMfaState {
-    fn complete_login(self, bw_client: &BrightwheelClient, email: String, password: String, mfa_code: String) -> AppState {
-        complete_login(bw_client, email, password, Some(mfa_code))
-    }
-}
-struct LoggedInState { }
-
-#[derive(Serialize)]
-struct InitViewResponse {
-    tab_name: String,
-}
-
-#[tauri::command]
-async fn init_view(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>) -> Result<InitViewResponse, ()> {
-    let outer_state = state_mutex.lock().await;
-    let tab_name = if let Some(state) = &outer_state.state_opt {
-        match state {
-            AppState::Start(_) => "login",
-            AppState::NeedsMfa(_) => "mfa",
-            AppState::LoggedIn(_) => "loggedin",
-            AppState::Error(_) => "login",
-        }
-    }
-    else {
-        "login"
-    };
-    Ok(InitViewResponse { tab_name: tab_name.into() })
-}
-
-#[derive(Serialize)]
-struct LoginResponse {
-    message: Option<String>,
-    tab_name: String,
+fn to_json_debug<S: Serialize>(x: &S) -> String {
+    serde_json::to_string_pretty(x).unwrap()
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
-async fn login(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>, email: String, password: String) -> Result<LoginResponse, ()> {
-    let mut outer_state = state_mutex.lock().await;
-    let (mut bw_client, mut state) = outer_state.remove();
+fn sync(state_mutex: State<'_, BackendSender>) -> Result<(), ()> {
+    // let response = {
+    //     let mut outer_state = state_mutex.lock().await;
+    //     let (mut bw_client, mut state) = outer_state.remove();
+          
+    //     let user_id;
+    //     (bw_client, user_id) = tokio::task::spawn_blocking(move || {
+    //         let user_id = bw_client.get_user_id();
+    //         (bw_client, user_id)
+    //     }).await.unwrap();
+    //     println!("got user_id: {}", user_id);
 
-    (bw_client, state) = match state {
-        AppState::Start(start_state) => {
-            let handle = tokio::task::spawn_blocking(move || {
-                let state = start_state.login(&bw_client, email, password);
-                (bw_client, state)
-            });
-            handle.await.unwrap()
-        },
-        _ => (bw_client, AppState::Error("wrong state for login".into()))
-    };
+    //     let students;
+    //     let user_id_2 = user_id.clone();
+    //     (bw_client, students) = tokio::task::spawn_blocking(|| {
+    //         let students = bw_client.get_students(user_id_2);
+    //         (bw_client, students)
+    //     }).await.unwrap();
+    //     for student in students {
+    //         bw_client = tokio::task::spawn_blocking(move || {
+    //             sync_student(&bw_client, student);
+    //             bw_client
+    //         }).await.unwrap()
+    //     }
 
-    let response = match &state {
-        AppState::Error(msg) => LoginResponse {
-            message: Some(msg.clone()),
-            tab_name: "login".into(),
-        },
-        AppState::NeedsMfa(_) => LoginResponse {
-            message: None,
-            tab_name: "mfa".into(),
-        },
-        AppState::LoggedIn(_) => LoginResponse {
-            message: None,
-            tab_name: "loggedin".into(),
-        },
-        _ => LoginResponse {
-            message: None,
-            tab_name: "login".into(),
-        }
-    };
-    outer_state.insert(bw_client, state);
-    Ok(response)
-}
+    //     outer_state.insert(bw_client, state);
+    //     SyncResponse {
+    //         user_id: Some(user_id),
+    //     }
+    // };
 
-#[derive(Serialize)]
-struct LoginMfaResponse {
-    message: Option<String>,
-    tab_name: String,
-}
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-async fn login_mfa(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>, email: String, password: String, mfa_code: String) -> Result<LoginMfaResponse, ()> {
-    println!("login_mfa({}, ***, {})", email, mfa_code);
-    let mut outer_state = state_mutex.lock().await;
-    let (mut bw_client, mut state) = outer_state.remove();
-
-    // TODO: This pattern of extracting state probably assumes that no commands get executed in here.
-    // Probably need to restructure using a real message queue.
-    // Probably should receive messages on a normal thread to process the queue and avoid async ownership nonsense.
-    // As usual, weird code means you're doing something wrong.
-    // Wait, nevermind, we hold the lock the whole time.
-    // The locking implicitly creates a queue.
-    // Still, ugly.
-
-    (bw_client, state) = match state {
-        AppState::NeedsMfa(needs_mfa_state) => {
-            tokio::task::spawn_blocking(|| {
-                let state = needs_mfa_state.complete_login(&bw_client, email, password, mfa_code);
-                (bw_client, state)
-            }).await.unwrap()
-        },
-        _ => (bw_client, AppState::Error("wrong state for login_mfa".into()))
-    };
-
-    let response = match &state {
-        AppState::Error(msg) => LoginMfaResponse {
-            message: Some(msg.clone()),
-            tab_name: "mfa".into(),
-        },
-        AppState::LoggedIn(_) => LoginMfaResponse {
-            message: None,
-            tab_name: "loggedin".into(),
-        },
-        _ => LoginMfaResponse {
-            message: None,
-            tab_name: "mfa".into(),
-        }
-    };
-
-    outer_state.insert(bw_client, state);
-    Ok(response)
-}
-
-#[derive(Serialize)]
-struct SyncResponse {
-    user_id: Option<String>,
-}
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-async fn sync(state_mutex: State<'_, tokio::sync::Mutex<OuterAppState>>) -> Result<SyncResponse, ()> {
-    let response = {
-        let mut outer_state = state_mutex.lock().await;
-        let (mut bw_client, mut state) = outer_state.remove();
-        
-        let user_id;
-        (bw_client, user_id) = tokio::task::spawn_blocking(move || {
-            let user_id = bw_client.get_user_id();
-            (bw_client, user_id)
-        }).await.unwrap();
-        println!("got user_id: {}", user_id);
-
-        let students;
-        let user_id_2 = user_id.clone();
-        (bw_client, students) = tokio::task::spawn_blocking(|| {
-            let students = bw_client.get_students(user_id_2);
-            (bw_client, students)
-        }).await.unwrap();
-        for student in students {
-            bw_client = tokio::task::spawn_blocking(move || {
-                sync_student(&bw_client, student);
-                bw_client
-            }).await.unwrap()
-        }
-
-        outer_state.insert(bw_client, state);
-        SyncResponse {
-            user_id: Some(user_id),
-        }
-    };
-
-    Ok(response)
+    Ok(())
 }
 
 fn sync_student(bw_client: &BrightwheelClient, student: Student) {
@@ -391,88 +410,16 @@ fn create_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
     month_path
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let (backend_sender, backend_receiver) = std::sync::mpsc::channel();
-
-    let outer_state = {
-        if let Ok(file) = std::fs::File::open("cookies.json")
-            .map(std::io::BufReader::new) {
-            println!("Opened cookies.json");
-
-            OuterAppState {
-                bw_client_opt: Some(brightwheel::BrightwheelClient::new(
-                    reqwest_cookie_store::CookieStore::load_json(file).unwrap()
-                )),
-                state_opt: Some(AppState::LoggedIn(LoggedInState { }))
-            }
-        }
-        else
-        {
-            println!("No cookies.json; using default cookie store");
-            OuterAppState {
-                bw_client_opt: Some(
-                    brightwheel::BrightwheelClient::new(reqwest_cookie_store::CookieStore::default())
-                ),
-                state_opt: Some(AppState::Start(StartState { }))
-            }
-        }
-    };
-
-    let app = Builder::default()
-        .setup(|app| {
-            app.manage(backend_sender);
-            Ok(())            
-        })
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![send_backend_message]).build(
-            tauri::generate_context!()
-        )
-        .expect("error while building tauri application");
-    let app_handle = app.app_handle().clone();
-
-    spawn_backend(backend_receiver, app_handle);
-
-    app.run(|_app, _event| { });
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-enum BackendMessage {
-    Test,
-    Exit
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-struct TestEvent {
-    message: String
-}
-
-#[derive(Default)]
-struct MyState {
-  s: std::sync::Mutex<String>,
-  t: std::sync::Mutex<std::collections::HashMap<String, String>>,
-}
-// remember to call `.manage(MyState::default())`
-#[tauri::command]
-fn send_backend_message(state: tauri::State<'_, std::sync::mpsc::Sender<BackendMessage>>) -> Result<(), String> {
-  state.send(BackendMessage::Test).unwrap();
-  Ok(())
-}
-
-
-fn spawn_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) -> JoinHandle<()> {
-    std::thread::spawn(move || {
-        loop {
-            match receiver.recv().unwrap() {
-                BackendMessage::Test => {
-                    app.emit("test-event", TestEvent {
-                        message: "Hello to frontend".into()
-                    }).unwrap()
-                },
-                BackendMessage::Exit => {
-                    break;
-                }
-            }
-        }
-    })
+fn init_cookie_store() -> (bool, reqwest_cookie_store::CookieStore) {
+    if let Ok(file) = std::fs::File::open("cookies.json")
+        .map(std::io::BufReader::new) {
+        println!("Opened cookies.json");
+        
+        (true, reqwest_cookie_store::CookieStore::load_json(file).unwrap())
+    }
+    else
+    {
+        println!("No cookies.json; using default cookie store");
+        (false, reqwest_cookie_store::CookieStore::default())
+    }
 }

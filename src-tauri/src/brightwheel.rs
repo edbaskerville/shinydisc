@@ -21,7 +21,7 @@ use reqwest::{
     blocking::{Client, Response}, cookie::{Jar}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
 use reqwest_cookie_store::CookieStoreMutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub struct BrightwheelClient {
@@ -30,7 +30,7 @@ pub struct BrightwheelClient {
     auth_headers: HeaderMap,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Student {
     pub object_id: String,
     pub first_name: String,
