@@ -3,11 +3,13 @@ pub mod brightwheel;
 
 use std::{path::{PathBuf}, sync::Arc};
 
-use jiff::{Timestamp};
+use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Builder, Emitter, Manager, State};
+
+use exiftool::ExifTool;
 
 use crate::brightwheel::{BrightwheelClient, Student};
 
@@ -261,6 +263,10 @@ impl LoggedInState {
 }
 
 fn sync_all(bw_client: &mut BrightwheelClient) {
+    let exiftool_path: PathBuf = "../exiftool/exiftool".into();
+    println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
+    let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
+
     // Get user_id
     let user_id = bw_client.get_user_id();
     println!("got user_id: {}", user_id);
@@ -271,11 +277,11 @@ fn sync_all(bw_client: &mut BrightwheelClient) {
 
     // Sync each student
     for student in students {
-        sync_student(&bw_client, student);
+        sync_student(&bw_client, &mut exif_tool, student);
     }
 }
 
-fn sync_student(bw_client: &BrightwheelClient, student: Student) {
+fn sync_student(bw_client: &BrightwheelClient, exif_tool: &mut ExifTool, student: Student) {
     println!("sync_student: {} {}", student.first_name, student.last_name);
 
     let student_path = PathBuf::from(format!("{} {}", student.first_name, student.last_name));
@@ -289,6 +295,17 @@ fn sync_student(bw_client: &BrightwheelClient, student: Student) {
     while download_activities(bw_client, &student, page_size, page, &student_path) {
         page += 1;
     }
+
+    println!("Updating exif data for student...");
+    let output = exif_tool.execute_lines(&[
+        "-r", "-overwrite_original", "-alldates<filename",
+        "-gpsposition=37.78401801046647, -122.50330791369049",
+        student_path.to_str().unwrap()
+    ]).unwrap();
+    for line in output {
+        println!("{}", line);
+    }
+    println!("...done");
 }
 
 fn download_activities(bw_client: &BrightwheelClient, student: &Student, page_size: usize, page: usize, path: &PathBuf) -> bool {
@@ -331,6 +348,7 @@ fn download_activities(bw_client: &BrightwheelClient, student: &Student, page_si
 
 fn download_photo(bw_client: &BrightwheelClient, student: &Student, path: &PathBuf, activity: &Map<String, Value>) {
     let timestamp = get_created_at(activity);
+    println!("timestamp: {:?}", timestamp);
     let object_id = get_object_id(activity);
     let month_path = create_month_path(path, &timestamp);
     let photo_info = activity.get("media").unwrap().as_object().unwrap();
@@ -374,7 +392,7 @@ fn download_video(bw_client: &BrightwheelClient, student: &Student, path: &PathB
 }
 
 
-fn format_filename(timestamp: &Timestamp, object_id: &str, extension: &str) -> String {
+fn format_filename(timestamp: &Zoned, object_id: &str, extension: &str) -> String {
     format!("{}-{}.{}", timestamp.strftime("%F-%H%M%S").to_string(), object_id, extension)
 }
 
@@ -382,16 +400,17 @@ fn get_object_id(obj: &Map<String, Value>) -> String {
     obj.get("object_id").unwrap().as_str().unwrap().into()
 }
 
-fn get_created_at(obj: &Map<String, Value>) -> Timestamp {
-    obj.get("created_at").unwrap().as_str().unwrap().parse().unwrap()
+fn get_created_at(obj: &Map<String, Value>) -> Zoned {
+    let timestamp: Timestamp = obj.get("created_at").unwrap().as_str().unwrap().parse().unwrap();
+    timestamp.in_tz("America/Los_Angeles").unwrap()
 }
 
-fn get_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
+fn get_month_path(path: &PathBuf, ts: &Zoned) -> PathBuf {
     let month_str = ts.strftime("%Y-%m").to_string();
     path.join(month_str)
 }
 
-fn create_month_path(path: &PathBuf, ts: &Timestamp) -> PathBuf {
+fn create_month_path(path: &PathBuf, ts: &Zoned) -> PathBuf {
     let month_path = get_month_path(path, ts);
     if !month_path.exists() {
         std::fs::create_dir(&month_path).unwrap();

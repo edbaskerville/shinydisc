@@ -27,3 +27,4 @@ map-macro = "0.3.0"
 reqwest_cookie_store = { version = "0.8.0" }
 jiff = "0.2"
 tokio = "1"
+exiftool = "0.2"
