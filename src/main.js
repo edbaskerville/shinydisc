@@ -1,11 +1,16 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+// const { open } = window.__TAURI__.dialog;
+
+const tauri = window.__TAURI__;
 
 let emailInput;
 let pwInput;
 let loginMsgEl;
+let outputDirEl;
 let mfaInput;
 let mfaMsgEl;
+let state;
 
 function setTab(targetTabName) {
   for(let tabName of ["login", "mfa", "loggedin", "syncing"]) {
@@ -55,26 +60,31 @@ listen('update-state', (event) => {
   console.log(
     "got update-state", event.payload
   );
-  update_view_from_state(event.payload);
+  state = event.payload;
+  updateViewFromState();
 
   // Code from command
   // let result = await invoke("init_view");
   // setTab(result.tab_name);
 });
 
-function update_view_from_state(state) {
-  if(state["NeedsLogIn"]) {
+function updateViewFromState() {
+  let backendState = state.backend_state;
+
+  if(backendState["NeedsLogIn"]) {
     setTab("login");
   }
-  else if(state["NeedsMfa"]) {
+  else if(backendState["NeedsMfa"]) {
     setTab("mfa");
   }
-  else if(state["LoggedIn"]) {
+  else if(backendState["LoggedIn"]) {
     setTab("loggedin");
   }
-  else if(state["Syncing"]) {
+  else if(backendState["Syncing"]) {
     setTab("syncing");
   }
+
+  outputDirEl.value = state.output_dir;
 }
 
 /*
@@ -129,6 +139,28 @@ listen('login-mfa-response', (event) => {
   // setTab(result.tab_name);
 });
 
+function chooseOutputPathSync() {
+  chooseOutputPath().then(() => {
+    console.log("promise succeeded");
+  },
+  () => {
+    console.log("promise failed");
+  });
+}
+
+async function chooseOutputPath() {
+  const output_dir = await tauri.dialog.open({
+    multiple: false,
+    directory: true,
+    defaultPath: state.output_dir,
+  });
+  if(output_dir) {
+    send_backend_message({
+      "SetOutputDir" : output_dir
+    });
+  }
+}
+
 function sync() {
   send_backend_message({
     "Sync" : null
@@ -148,14 +180,8 @@ window.addEventListener("DOMContentLoaded", () => {
   pwInput = document.querySelector("#password-input");
   mfaInput = document.querySelector("#mfa-input");
   loginMsgEl = document.querySelector("#login-error-p");
+  outputDirEl = document.querySelector("#output-dir-input")
   mfaMsgEl = document.querySelector("#mfa-error-p");
-
-  document.querySelector("#test-backend-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    send_backend_message({
-      "Test" : null
-    });
-  });
 
   document.querySelector("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -165,6 +191,11 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector("#mfa-form").addEventListener("submit", (e) => {
     e.preventDefault();
     login_mfa();
+  });
+
+  document.querySelector("#choose-folder-button").addEventListener("click", (e) => {
+    e.preventDefault();
+    chooseOutputPath();
   });
 
   document.querySelector("#loggedin-form").addEventListener("submit", (e) => {

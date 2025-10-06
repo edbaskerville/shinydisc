@@ -19,9 +19,6 @@
             <input id="password-input" type="password" placeholder="Password" />
           </p>
           <p class="row">
-            <input id="student-input" placeholder="Student Name" />
-          </p>
-          <p class="row">
             <button type="submit">Log In</button>
           </p>
           
@@ -41,7 +38,11 @@
       </div>
 
       <div class="tab-hidden" id="loggedin-tab">
-        <form id="loggedin-form"
+        <form id="loggedin-form">
+          <p class="row">
+            <button id="choose-folder-button" type="button">Choose Folder...</button>
+            <input id="output-dir-input"/>
+          </p>
           <p class="row">
             <button type="submit">Sync</button>
           </p>
@@ -55,10 +56,6 @@
           </p>
         </form>
       </div>
-
-      <form id="test-backend-form">
-        <button type="submit">Test Backend Message</button>
-      </form>
     </main>
   </body>
 </html>

@@ -1,12 +1,12 @@
 
 pub mod brightwheel;
 
-use std::{path::{PathBuf}, sync::Arc};
+use std::{path::{self, Path, PathBuf}, str::FromStr, sync::Arc};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Builder, Emitter, Manager, State};
 
 use exiftool::ExifTool;
@@ -14,6 +14,12 @@ use exiftool::ExifTool;
 use crate::brightwheel::{BrightwheelClient, Student};
 
 type BackendSender = std::sync::mpsc::Sender<BackendMessage>;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct FrontendState {
+    output_dir: String,
+    backend_state: BackendState,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BackendState {
@@ -67,6 +73,7 @@ enum BackendMessage {
     LogInMfa {
         mfa_code: String,
     },
+    SetOutputDir(String),
     Sync,
     Exit
 }
@@ -80,12 +87,21 @@ pub fn run() {
             app.manage(backend_sender);
             Ok(())            
         })
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![send_backend_message]).build(
             tauri::generate_context!()
         )
         .expect("error while building tauri application");
     let app_handle = app.app_handle().clone();
+
+    let config_dir = app_handle.path().app_config_dir().unwrap();
+    println!("config_dir: {}", config_dir.to_str().unwrap());
+    if !config_dir.exists() {
+        std::fs::create_dir_all(config_dir).unwrap();
+    }
+
+
 
     std::thread::spawn(move || {
         run_backend(backend_receiver, app_handle);
@@ -94,7 +110,7 @@ pub fn run() {
 }
 
 fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) {
-    let (already_logged_in, cookie_store) = init_cookie_store();
+    let (already_logged_in, cookie_store) = init_cookie_store(&app);
     let mut bw_client = BrightwheelClient::new(cookie_store);
     let mut state = if already_logged_in {
         BackendState::LoggedIn(LoggedInState {  })
@@ -114,13 +130,16 @@ fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHand
                 // state always updated below
             },
             BackendMessage::LogIn { email, password } => {
-                state = log_in(&mut bw_client, state, email, password);
+                state = log_in(&app, &mut bw_client, state, email, password);
             },
             BackendMessage::LogInMfa { mfa_code } => {
-                state = log_in_mfa(&mut bw_client, state, mfa_code);
+                state = log_in_mfa(&app, &mut bw_client, state, mfa_code);
+            },
+            BackendMessage::SetOutputDir(output_dir) => {
+                set_output_dir(&app, PathBuf::from_str(&output_dir).unwrap());
             },
             BackendMessage::Sync => {
-                state = sync(&mut bw_client, state);
+                state = sync(&app, &mut bw_client, state);
             },
             BackendMessage::Exit => {
                 break;
@@ -156,17 +175,22 @@ fn respond_to_test_message(app: &AppHandle) {
 
 /*** FRONTEND STATE UPDATE ***/
 
-fn update_state(app: &AppHandle, state: &BackendState) {
-    app.emit("update-state", state.clone()).unwrap();
+fn update_state(app: &AppHandle, backend_state: &BackendState) {
+    let frontend_state = FrontendState {
+        output_dir: output_dir(app).to_str().unwrap().into(),
+        backend_state: backend_state.clone(),
+    };
+
+    app.emit("update-state", frontend_state).unwrap();
 }
 
 
 /*** LOGIN ***/
 
-fn log_in(bw_client: &mut BrightwheelClient, state: BackendState, email: String, password: String) -> BackendState {
+fn log_in(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, email: String, password: String) -> BackendState {
     match state {
         BackendState::NeedsLogin(needs_login_state) => {
-            needs_login_state.log_in(bw_client, email, password)
+            needs_login_state.log_in(app, bw_client, email, password)
         },
         _ => BackendState::UnexpectedError(
             format!("Backend in unexpected state for login: {:?}", state)
@@ -175,7 +199,7 @@ fn log_in(bw_client: &mut BrightwheelClient, state: BackendState, email: String,
 }
 
 impl NeedsLoginState {
-    fn log_in(self, bw_client: &mut BrightwheelClient, email: String, password: String) -> BackendState {
+    fn log_in(self, app: &AppHandle, bw_client: &mut BrightwheelClient, email: String, password: String) -> BackendState {
         let response = bw_client.post_sessions_start(email.clone(), password.clone());
         let response_json = response.json::<serde_json::Value>().unwrap();
 
@@ -189,7 +213,7 @@ impl NeedsLoginState {
                             })
                         }
                         else {
-                            complete_login(bw_client, email, password, None)
+                            complete_login(app, bw_client, email, password, None)
                         }
                     }
                     else {
@@ -209,30 +233,30 @@ impl NeedsLoginState {
 }
 
 
-fn log_in_mfa(bw_client: &mut BrightwheelClient, state: BackendState, mfa_code: String) -> BackendState {
+fn log_in_mfa(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, mfa_code: String) -> BackendState {
     match state {
         BackendState::NeedsMfa(needs_mfa_state) => {
-            needs_mfa_state.log_in_mfa(bw_client, mfa_code)
+            needs_mfa_state.log_in_mfa(app, bw_client, mfa_code)
         },
         _ => BackendState::UnexpectedError(format!("Backend in unexpected state for mfa login: {:?}", state)),
     }
 }
 
 impl NeedsMfaState {
-    fn log_in_mfa(self, bw_client: &mut BrightwheelClient, mfa_code: String) -> BackendState {
-        complete_login(bw_client, self.email, self.password, Some(mfa_code))
+    fn log_in_mfa(self, app: &AppHandle, bw_client: &mut BrightwheelClient, mfa_code: String) -> BackendState {
+        complete_login(app, bw_client, self.email, self.password, Some(mfa_code))
     }
 }
 
 
-fn complete_login(bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> BackendState {
+fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> BackendState {
     let response = bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone());
     let response_json = response.json::<serde_json::Value>().unwrap();
     println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
     match response_json {
         serde_json::Value::Object(response_obj) => {
             // TODO: could be invalid response??
-            write_cookies(&bw_client.cookie_store_arc_mutex);
+            write_cookies(app, &bw_client.cookie_store_arc_mutex);
 
             BackendState::LoggedIn(LoggedInState { })
         },
@@ -244,10 +268,10 @@ fn complete_login(bw_client: &BrightwheelClient, email: String, password: String
 
 /*** SYNC ***/
 
-fn sync(bw_client: &mut BrightwheelClient, state: BackendState) -> BackendState {
+fn sync(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState) -> BackendState {
     match state {
         BackendState::LoggedIn(logged_in_state) => {
-            logged_in_state.sync(bw_client)
+            logged_in_state.sync(app, bw_client)
         },
         _ => {
             BackendState::UnexpectedError(format!("Unexpected state for sync: {:?}", state))
@@ -256,13 +280,13 @@ fn sync(bw_client: &mut BrightwheelClient, state: BackendState) -> BackendState 
 }
 
 impl LoggedInState {
-    fn sync(self, bw_client: &mut BrightwheelClient) -> BackendState {
-        sync_all(bw_client);
+    fn sync(self, app: &AppHandle, bw_client: &mut BrightwheelClient) -> BackendState {
+        sync_all(app, bw_client);
         BackendState::LoggedIn(LoggedInState {  })
     }
 }
 
-fn sync_all(bw_client: &mut BrightwheelClient) {
+fn sync_all(app: &AppHandle, bw_client: &mut BrightwheelClient) {
     let exiftool_path: PathBuf = "../exiftool/exiftool".into();
     println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
     let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
@@ -277,14 +301,14 @@ fn sync_all(bw_client: &mut BrightwheelClient) {
 
     // Sync each student
     for student in students {
-        sync_student(&bw_client, &mut exif_tool, student);
+        sync_student(app, &bw_client, &mut exif_tool, student);
     }
 }
 
-fn sync_student(bw_client: &BrightwheelClient, exif_tool: &mut ExifTool, student: Student) {
+fn sync_student(app: &AppHandle, bw_client: &BrightwheelClient, exif_tool: &mut ExifTool, student: Student) {
     println!("sync_student: {} {}", student.first_name, student.last_name);
 
-    let student_path = PathBuf::from(format!("{} {}", student.first_name, student.last_name));
+    let student_path = output_dir(app).join(format!("{} {}", student.first_name, student.last_name));
     if !student_path.exists() {
         std::fs::create_dir(&student_path).unwrap();
     }
@@ -421,8 +445,58 @@ fn create_month_path(path: &PathBuf, ts: &Zoned) -> PathBuf {
 
 /*** UTILITY FUNCTIONS ***/
 
-fn write_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
-    let mut writer = std::fs::File::create("cookies.json")
+fn config_dir(app: &AppHandle) -> PathBuf {
+    app.path().app_config_dir().unwrap()
+}
+
+fn config_path(app: &AppHandle) -> PathBuf {
+    config_dir(app).join("config.json")
+}
+
+fn config(app: &AppHandle) -> serde_json::Value {
+    let config_path = config_path(app);
+    if config_path.exists() {
+        let file = std::fs::File::open(&config_path).unwrap();
+        serde_json::from_reader(file).unwrap()
+    }
+    else {
+        json!({})
+    }
+}
+
+fn write_config(app: &AppHandle, config: serde_json::Value) {
+    let config_path = config_path(app);
+    let file = std::fs::File::options().create(true).truncate(true).open(&config_path).unwrap();
+    serde_json::to_writer(file, &config).unwrap();
+}
+
+fn set_output_dir(app: &AppHandle, output_dir: PathBuf) {
+    let config = json!({"output_dir" : output_dir.to_str().unwrap() });
+    write_config(app, config);
+}
+
+fn cookies_path(app: &AppHandle) -> PathBuf {
+    app.path().app_config_dir().unwrap().join("cookies.json")
+}
+
+fn output_dir(app: &AppHandle) -> PathBuf {
+    let config = config(app);
+    let config_map = config.as_object().unwrap();
+
+    if config_map.contains_key("output_dir") {
+        config_map.get("output_dir").unwrap().as_str().unwrap().into()
+    }
+    else {
+        default_output_dir(app)
+    }
+}
+
+fn default_output_dir(app: &AppHandle) -> PathBuf {
+    app.path().picture_dir().unwrap().join("shinydisc")
+}
+
+fn write_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
+    let mut writer = std::fs::File::create(cookies_path(app))
       .map(std::io::BufWriter::new)
       .unwrap();
     cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer);
@@ -432,8 +506,8 @@ fn to_json_debug<S: Serialize>(x: &S) -> String {
     serde_json::to_string_pretty(x).unwrap()
 }
 
-fn init_cookie_store() -> (bool, reqwest_cookie_store::CookieStore) {
-    if let Ok(file) = std::fs::File::open("cookies.json")
+fn init_cookie_store(app: &AppHandle) -> (bool, reqwest_cookie_store::CookieStore) {
+    if let Ok(file) = std::fs::File::open(cookies_path(app))
         .map(std::io::BufReader::new) {
         println!("Opened cookies.json");
         
