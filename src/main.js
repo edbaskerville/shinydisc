@@ -12,7 +12,7 @@ let mfaInput;
 let mfaMsgEl;
 let state;
 
-function setTab(targetTabName) {
+export function setTab(targetTabName) {
   for(let tabName of ["login", "mfa", "loggedin", "syncing"]) {
     let tabEl = document.querySelector("#" + tabName + "-tab");
     if(tabName == targetTabName) {
@@ -26,7 +26,7 @@ function setTab(targetTabName) {
   }
 }
 
-function send_backend_message(message) {
+export function sendBackendMessage(message) {
   console.log("Sending backend message");
   invoke("send_backend_message", {
     "message" : message
@@ -43,15 +43,12 @@ listen('test-event', (event) => {
   console.log(event.payload.message);
 });
 
-
 /*
-  Request state update from backend
+  Listen to frontend
 */
-function request_state() {
-  send_backend_message({
-    "RequestState" : null
-  });
-}
+listen('log-event', (event) => {
+  console.log("log message from backend:", event.payload);
+});
 
 /*
   Listen to event updating state 
@@ -91,7 +88,7 @@ function updateViewFromState() {
   Send login information to backend
 */
 function login() {
-  send_backend_message({
+  sendBackendMessage({
     "LogIn" : {
       email: emailInput.value,
       password: pwInput.value
@@ -120,7 +117,7 @@ listen('login-response', (event) => {
 
 
 function login_mfa() {
-  send_backend_message({
+  sendBackendMessage({
     "LogInMfa" : {
       "mfa_code": mfaInput.value
     }
@@ -155,16 +152,10 @@ async function chooseOutputPath() {
     defaultPath: state.output_dir,
   });
   if(output_dir) {
-    send_backend_message({
+    sendBackendMessage({
       "SetOutputDir" : output_dir
     });
   }
-}
-
-function sync() {
-  send_backend_message({
-    "Sync" : null
-  });
 }
 
 listen('sync-update', (event) => {
@@ -174,7 +165,7 @@ listen('sync-update', (event) => {
 });
 
 window.addEventListener("DOMContentLoaded", () => {
-  request_state();
+  sendBackendMessage({DOMContentLoaded: null});
 
   emailInput = document.querySelector("#email-input");
   pwInput = document.querySelector("#password-input");
@@ -200,6 +191,6 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.querySelector("#loggedin-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    sync();
+    sendBackendMessage({Sync: null});
   });
 });

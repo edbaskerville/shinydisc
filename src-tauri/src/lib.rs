@@ -65,6 +65,7 @@ struct UnexpectedErrorState {
 #[derive(Serialize, Deserialize, Clone)]
 enum BackendMessage {
     Test,
+    DOMContentLoaded,
     RequestState,
     LogIn {
         email: String,
@@ -96,7 +97,6 @@ pub fn run() {
     let app_handle = app.app_handle().clone();
 
     let config_dir = app_handle.path().app_config_dir().unwrap();
-    println!("config_dir: {}", config_dir.to_str().unwrap());
     if !config_dir.exists() {
         std::fs::create_dir_all(config_dir).unwrap();
     }
@@ -126,14 +126,31 @@ fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHand
             BackendMessage::Test => {
                 respond_to_test_message(&app);
             },
+            BackendMessage::DOMContentLoaded => {    
+                log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
+            },
             BackendMessage::RequestState => {
                 // state always updated below
             },
             BackendMessage::LogIn { email, password } => {
-                state = log_in(&app, &mut bw_client, state, email, password);
+                match state {
+                    BackendState::NeedsLogin(needs_login_state) => {
+                        state = needs_login_state.log_in(&app, &mut bw_client, email, password);
+                    },
+                    _ => {
+                        log_to_frontend(&app, format!("LogIn received from wrong state: {:?}", state));
+                    }
+                }
             },
             BackendMessage::LogInMfa { mfa_code } => {
-                state = log_in_mfa(&app, &mut bw_client, state, mfa_code);
+                match state {
+                    BackendState::NeedsMfa(needs_mfa_state) => {
+                        state = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
+                    },
+                    _ => {
+                        log_to_frontend(&app, format!("LogInMfa received from wrong state: {:?}", state));
+                    }
+                }
             },
             BackendMessage::SetOutputDir(output_dir) => {
                 set_output_dir(&app, PathBuf::from_str(&output_dir).unwrap());
@@ -172,6 +189,11 @@ fn respond_to_test_message(app: &AppHandle) {
     }).unwrap();
 }
 
+/*** FRONTEND DEBUG LOGGING ***/
+
+fn log_to_frontend(app: &AppHandle, log_msg: String) {
+    app.emit("log-event", log_msg).unwrap();
+}
 
 /*** FRONTEND STATE UPDATE ***/
 
@@ -187,16 +209,15 @@ fn update_state(app: &AppHandle, backend_state: &BackendState) {
 
 /*** LOGIN ***/
 
-fn log_in(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, email: String, password: String) -> BackendState {
-    match state {
-        BackendState::NeedsLogin(needs_login_state) => {
-            needs_login_state.log_in(app, bw_client, email, password)
-        },
-        _ => BackendState::UnexpectedError(
-            format!("Backend in unexpected state for login: {:?}", state)
-        )
-    }
-}
+// #[derive(Serialize, Deserialize, Clone, Debug)]
+// enum LogInError {
+//     WrongState
+// }
+
+// fn log_in(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, email: String, password: String) -> Result<BackendState, LogInError> {
+//     match state {
+//     }
+// }
 
 impl NeedsLoginState {
     fn log_in(self, app: &AppHandle, bw_client: &mut BrightwheelClient, email: String, password: String) -> BackendState {
@@ -233,14 +254,14 @@ impl NeedsLoginState {
 }
 
 
-fn log_in_mfa(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, mfa_code: String) -> BackendState {
-    match state {
-        BackendState::NeedsMfa(needs_mfa_state) => {
-            needs_mfa_state.log_in_mfa(app, bw_client, mfa_code)
-        },
-        _ => BackendState::UnexpectedError(format!("Backend in unexpected state for mfa login: {:?}", state)),
-    }
-}
+// fn log_in_mfa(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, mfa_code: String) -> BackendState {
+//     match state {
+//         BackendState::NeedsMfa(needs_mfa_state) => {
+//             needs_mfa_state.log_in_mfa(app, bw_client, mfa_code)
+//         },
+//         _ => BackendState::UnexpectedError(format!("Backend in unexpected state for mfa login: {:?}", state)),
+//     }
+// }
 
 impl NeedsMfaState {
     fn log_in_mfa(self, app: &AppHandle, bw_client: &mut BrightwheelClient, mfa_code: String) -> BackendState {
