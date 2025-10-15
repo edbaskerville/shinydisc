@@ -13,6 +13,7 @@ use exiftool::ExifTool;
 
 use crate::brightwheel::{BrightwheelClient, Student};
 
+type BackendReceiver = std::sync::mpsc::Receiver<BackendMessage>;
 type BackendSender = std::sync::mpsc::Sender<BackendMessage>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -288,6 +289,139 @@ fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String,
 }
 
 /*** SYNC ***/
+
+#[derive(Serialize, Deserialize, Clone)]
+enum SyncMessage {
+    Cancel
+}
+
+type SyncSender = std::sync::mpsc::Sender<SyncMessage>;
+type SyncReceiver = std::sync::mpsc::Receiver<SyncMessage>;
+
+struct SyncItem {
+    timestamp: Zoned,
+    url: reqwest::Url,
+    object_id: String,
+    extension: String,
+}
+
+fn run_sync(output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
+    let exiftool_path: PathBuf = "../exiftool/exiftool".into();
+    println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
+    let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
+
+    let mut syncer = Syncer {
+        output_root,
+        bw_client,
+        sync_receiver,
+        backend_sender,
+        exif_tool
+    };
+    syncer.sync();
+}
+
+
+struct Syncer {
+    output_root: PathBuf,
+    bw_client: BrightwheelClient,
+    sync_receiver: SyncReceiver,
+    backend_sender: BackendSender,
+    exif_tool: ExifTool,
+}
+
+impl Syncer {
+    const PAGE_SIZE: usize = 1000;
+
+    fn sync(&mut self) {    
+        // Get user_id
+        let user_id = self.bw_client.get_user_id();
+        println!("got user_id: {}", user_id);
+
+        // Get list of students;
+        let user_id_2 = user_id.clone();
+        let students = self.bw_client.get_students(user_id_2);
+
+        // Sync each student
+        for student in students {
+            self.sync_student(student);
+        }
+    }
+
+    fn sync_student(&mut self, student: Student) {
+        println!("sync_student: {} {}", student.first_name, student.last_name);
+
+        let student_path = self.output_root.join(format!("{} {}", student.first_name, student.last_name));
+        if !student_path.exists() {
+            std::fs::create_dir(&student_path).unwrap();
+        }
+
+        let sync_items = self.get_sync_items(&student);
+
+        println!("...done");
+    }
+
+    fn get_sync_items(&mut self, student: &Student) {
+        println!("get_sync_items: {} {}", student.first_name, student.last_name);
+
+        let mut sync_items = Vec::new();
+        let mut page: usize = 0;
+        loop {
+            let mut sync_items_on_page = self.get_sync_items_on_page(student, page);
+            if sync_items.len() == 0 {
+                break;
+            }
+            sync_items.append(&mut sync_items_on_page);
+            page += 1;
+        }
+    }
+
+    fn get_sync_items_on_page(&mut self, student: &Student, page: usize) -> Vec<SyncItem> {
+        let response_json = self.bw_client.get_students_activities(
+            student.object_id.clone(), Self::PAGE_SIZE, page
+        ).json::<Value>().unwrap();
+        let response_obj = response_json.as_object().unwrap();
+        println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
+
+        let page = response_obj.get("page").unwrap().as_u64().unwrap() as usize;
+        let page_size = response_obj.get("page_size").unwrap().as_u64().unwrap() as usize;
+        println!("page, page_size: {}, {}", page, page_size);
+
+        let activities = response_obj.get("activities").unwrap().as_array().unwrap();
+        println!("# activities: {}", activities.len());
+
+        activities.iter().filter_map(|activity_val| {
+            self.get_sync_item_for_activity(activity_val.as_object().unwrap())
+        }).collect()
+    }
+
+    fn get_sync_item_for_activity(&mut self, activity: &Map<String, Value>) -> Option<SyncItem> {
+        let timestamp = get_created_at(activity);
+        let object_id = get_object_id(activity);
+
+        let url_ext_opt: Option<(_, String)> = if activity.get("media").unwrap().is_object() {
+            let photo_info = activity.get("media").unwrap().as_object().unwrap();
+            let url = reqwest::Url::parse(photo_info.get("image_url").unwrap().as_str().unwrap()).unwrap();
+            Some((url, "jpg".into()))
+        }
+        else if activity.get("video_info").unwrap().is_object() {
+            let video_info = activity.get("video_info").unwrap().as_object().unwrap();
+            let url = reqwest::Url::parse(video_info.get("downloadable_url").unwrap().as_str().unwrap()).unwrap();
+            Some((url, "mp4".into()))
+        }
+        else {
+            None
+        };
+
+        url_ext_opt.map(|(url, extension)| {
+            SyncItem {
+                timestamp,
+                url,
+                object_id,
+                extension,
+            }
+        })
+    }
+}
 
 fn sync(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState) -> BackendState {
     match state {

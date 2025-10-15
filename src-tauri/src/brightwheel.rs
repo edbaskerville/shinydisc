@@ -18,7 +18,7 @@ const AUTH_HEADERS_JSON: &str = r#"{
 }"#;
 
 use reqwest::{
-    blocking::{Client, Response}, cookie::{Jar}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
+    blocking::{Client, Response}, cookie::{self, Jar}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
@@ -38,14 +38,16 @@ pub struct Student {
 }
 
 impl BrightwheelClient {
+    fn make_client(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Client{
+        Client::builder().cookie_provider(cookie_store_arc_mutex).build().unwrap()
+    }
+
     pub fn new(cookie_store: reqwest_cookie_store::CookieStore) -> Self {
         let cookie_store_arc_mutex = Arc::new(
             CookieStoreMutex::new(cookie_store)
         );
 
-        let client = Client::builder()
-            .cookie_provider(std::sync::Arc::clone(&cookie_store_arc_mutex))
-            .build().unwrap();
+        let client = Self::make_client(cookie_store_arc_mutex.clone());
         let auth_headers = HeaderMap::from_iter(vec![
             (CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap()),
             (
@@ -185,5 +187,15 @@ impl BrightwheelClient {
         let mut file: std::fs::File = std::fs::File::create(dst_path).unwrap();
         let mut response = self.client.execute(request).unwrap();
         response.copy_to(&mut file).unwrap();
+    }
+}
+
+impl Clone for BrightwheelClient {
+    fn clone(&self) -> Self {
+        Self {
+            client: Self::make_client(self.cookie_store_arc_mutex.clone()),
+            cookie_store_arc_mutex: self.cookie_store_arc_mutex.clone(),
+            auth_headers: self.auth_headers.clone()
+        }
     }
 }
