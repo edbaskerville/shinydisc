@@ -29,6 +29,7 @@ enum BackendState {
     NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
     Syncing(SyncingState),
+    SyncCanceling(SyncCancelingState),
     UnexpectedError(String),
 }
 
@@ -55,6 +56,11 @@ struct SyncingState {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+struct SyncCancelingState {
+
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct UnexpectedErrorState {
     message: String,
 }
@@ -75,6 +81,7 @@ enum BackendMessage {
     DownloadStarted(PathBuf),
     SyncComplete,
     CancelSync,
+    SyncCanceled,
     LogToFrontend(String),
     Exit
 }
@@ -180,6 +187,10 @@ fn run_backend(sender: std::sync::mpsc::Sender<BackendMessage>, receiver: std::s
             },
             BackendMessage::CancelSync => {
                 state = cancel_sync(state, &sync_sender);
+                Some("Cancelling...".to_string())
+            },
+            BackendMessage::SyncCanceled => {
+                state = sync_canceled(state);
                 Some("Sync canceled.".to_string())
             },
             BackendMessage::LogToFrontend(msg) => {
@@ -367,6 +378,9 @@ impl SyncEngine {
         loop {
             if let Some(item) = self.download_items.pop_front() {
                 self.download_item(item);
+                if self.download_items.is_empty() {
+                    self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
+                }
                 
                 match self.sync_receiver.try_recv() {
                     Ok(msg) => {
@@ -376,6 +390,7 @@ impl SyncEngine {
                             },
                             SyncMessage::Cancel => {
                                 self.download_items.clear();
+                                self.backend_sender.send(BackendMessage::SyncCanceled);
                             },
                         }
                     },
@@ -387,10 +402,6 @@ impl SyncEngine {
                             },
                         }
                     },
-                }
-
-                if self.download_items.is_empty() {
-                    self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
                 }
             }
             else {
@@ -549,6 +560,17 @@ fn cancel_sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
     }
 }
 
+fn sync_canceled(state: BackendState) -> BackendState {
+    match state {
+        BackendState::SyncCanceling(sync_canceling_state) => {
+            sync_canceling_state.sync_canceled()
+        },
+        _ => {
+            BackendState::UnexpectedError(format!("Unexpected state for sync canceled: {:?}", state))
+        }
+    }
+}
+
 fn sync_complete(state: BackendState) -> BackendState {
     match state {
         BackendState::Syncing(syncing_state) => {
@@ -570,10 +592,16 @@ impl LoggedInState {
 impl SyncingState {
     fn cancel_sync(self, sync_sender: &SyncSender) -> BackendState {
         sync_sender.send(SyncMessage::Cancel).unwrap();
-        BackendState::LoggedIn(LoggedInState { })
+        BackendState::SyncCanceling(SyncCancelingState { })
     }
 
     fn sync_complete(self) -> BackendState {
+        BackendState::LoggedIn(LoggedInState { })
+    }
+}
+
+impl SyncCancelingState {
+    fn sync_canceled(self) -> BackendState {
         BackendState::LoggedIn(LoggedInState { })
     }
 }

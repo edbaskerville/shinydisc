@@ -11,6 +11,7 @@ let messageEl;
 let outputDirEl;
 let mfaInput;
 let mfaMsgEl;
+let cancelSyncBtn;
 let state;
 
 export function setTab(targetTabName) {
@@ -79,6 +80,12 @@ function updateViewFromState() {
     setTab("loggedin");
   }
   else if(backendState["Syncing"]) {
+    cancelSyncBtn.disabled = false;
+    setTab("syncing");
+  }
+  else if(backendState["SyncCanceling"]) {
+    console.log("state is SyncCanceling");
+    cancelSyncBtn.disabled = true;
     setTab("syncing");
   }
 
@@ -176,6 +183,8 @@ window.addEventListener("DOMContentLoaded", () => {
   messageEl = document.querySelector("#message-p");
   outputDirEl = document.querySelector("#output-dir-input")
   mfaMsgEl = document.querySelector("#mfa-error-p");
+  cancelSyncBtn = document.getElementById("cancel-sync-btn");
+  console.log(cancelSyncBtn);
 
   document.querySelector("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
