@@ -7,6 +7,7 @@ const tauri = window.__TAURI__;
 let emailInput;
 let pwInput;
 let loginMsgEl;
+let messageEl;
 let outputDirEl;
 let mfaInput;
 let mfaMsgEl;
@@ -81,6 +82,7 @@ function updateViewFromState() {
     setTab("syncing");
   }
 
+  messageEl.innerText = state.message;
   outputDirEl.value = state.output_dir;
 }
 
@@ -171,6 +173,7 @@ window.addEventListener("DOMContentLoaded", () => {
   pwInput = document.querySelector("#password-input");
   mfaInput = document.querySelector("#mfa-input");
   loginMsgEl = document.querySelector("#login-error-p");
+  messageEl = document.querySelector("#message-p");
   outputDirEl = document.querySelector("#output-dir-input")
   mfaMsgEl = document.querySelector("#mfa-error-p");
 
@@ -192,5 +195,10 @@ window.addEventListener("DOMContentLoaded", () => {
   document.querySelector("#loggedin-form").addEventListener("submit", (e) => {
     e.preventDefault();
     sendBackendMessage({Sync: null});
+  });
+
+  document.querySelector("#syncing-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    sendBackendMessage({CancelSync: null});
   });
 });

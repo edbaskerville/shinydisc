@@ -1,7 +1,7 @@
 
 pub mod brightwheel;
 
-use std::{path::{self, Path, PathBuf}, str::FromStr, sync::Arc};
+use std::{collections::VecDeque, path::{self, Path, PathBuf}, str::FromStr, sync::Arc};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -18,6 +18,7 @@ type BackendSender = std::sync::mpsc::Sender<BackendMessage>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct FrontendState {
+    message: Option<String>,
     output_dir: String,
     backend_state: BackendState,
 }
@@ -27,7 +28,7 @@ enum BackendState {
     NeedsLogin(NeedsLoginState),
     NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
-    // Syncing(SyncingState),
+    Syncing(SyncingState),
     UnexpectedError(String),
 }
 
@@ -48,15 +49,10 @@ struct LoggedInState {
 
 }
 
-// #[derive(Serialize, Deserialize, Debug, Clone)]
-// struct SyncingState {
-//     student: Student,
-//     num_pages: u64,
-//     page_num: u64,
-//     num_activities: u64,
-//     activity_num: u64,
-//     last_activity_name: Option<String>,
-// }
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct SyncingState {
+
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct UnexpectedErrorState {
@@ -67,7 +63,6 @@ struct UnexpectedErrorState {
 enum BackendMessage {
     Test,
     DOMContentLoaded,
-    RequestState,
     LogIn {
         email: String,
         password: String,
@@ -77,12 +72,17 @@ enum BackendMessage {
     },
     SetOutputDir(String),
     Sync,
+    DownloadStarted(PathBuf),
+    SyncComplete,
+    CancelSync,
+    LogToFrontend(String),
     Exit
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (backend_sender, backend_receiver) = std::sync::mpsc::channel();
+    let backend_sender_2 = backend_sender.clone();
 
     let app = Builder::default()
         .setup(|app| {
@@ -102,15 +102,13 @@ pub fn run() {
         std::fs::create_dir_all(config_dir).unwrap();
     }
 
-
-
     std::thread::spawn(move || {
-        run_backend(backend_receiver, app_handle);
+        run_backend(backend_sender_2, backend_receiver, app_handle);
     });
     app.run(|_app, _event| { });
 }
 
-fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) {
+fn run_backend(sender: std::sync::mpsc::Sender<BackendMessage>, receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) {
     let (already_logged_in, cookie_store) = init_cookie_store(&app);
     let mut bw_client = BrightwheelClient::new(cookie_store);
     let mut state = if already_logged_in {
@@ -122,16 +120,25 @@ fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHand
         })
     };
 
+    // Launch sync engine thread
+    let (sync_sender, sync_receiver) = std::sync::mpsc::channel();
+    {
+        let output_root = output_dir(&app);
+        let bw_client = bw_client.clone();
+        std::thread::spawn(move || {
+            run_sync_engine(output_root, bw_client, sync_receiver, sender);
+        });
+    }
+
     loop {
-        match receiver.recv().unwrap() {
+        let frontend_message = match receiver.recv().unwrap() {
             BackendMessage::Test => {
                 respond_to_test_message(&app);
+                Some("Test message".to_string())
             },
             BackendMessage::DOMContentLoaded => {    
                 log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
-            },
-            BackendMessage::RequestState => {
-                // state always updated below
+                None
             },
             BackendMessage::LogIn { email, password } => {
                 match state {
@@ -141,29 +148,49 @@ fn run_backend(receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHand
                     _ => {
                         log_to_frontend(&app, format!("LogIn received from wrong state: {:?}", state));
                     }
-                }
+                };
+                None
             },
             BackendMessage::LogInMfa { mfa_code } => {
                 match state {
                     BackendState::NeedsMfa(needs_mfa_state) => {
                         state = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
+                        None
                     },
                     _ => {
                         log_to_frontend(&app, format!("LogInMfa received from wrong state: {:?}", state));
+                        None
                     }
                 }
             },
             BackendMessage::SetOutputDir(output_dir) => {
                 set_output_dir(&app, PathBuf::from_str(&output_dir).unwrap());
+                Some("Output directory set.".to_string())
             },
             BackendMessage::Sync => {
-                state = sync(&app, &mut bw_client, state);
+                state = sync(state, &sync_sender);
+                None
             },
+            BackendMessage::DownloadStarted(path) => {
+                Some(path.to_str().unwrap().into())
+            },
+            BackendMessage::SyncComplete => {
+                state = sync_complete(state);
+                Some("Sync complete".to_string())
+            },
+            BackendMessage::CancelSync => {
+                state = cancel_sync(state, &sync_sender);
+                Some("Sync canceled.".to_string())
+            },
+            BackendMessage::LogToFrontend(msg) => {
+                log_to_frontend(&app, msg);
+                None
+            }
             BackendMessage::Exit => {
                 break;
             }
-        }
-        update_state(&app, &state);
+        };
+        update_state(&app, &state, frontend_message);
     }
 }
 
@@ -198,8 +225,9 @@ fn log_to_frontend(app: &AppHandle, log_msg: String) {
 
 /*** FRONTEND STATE UPDATE ***/
 
-fn update_state(app: &AppHandle, backend_state: &BackendState) {
+fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message: Option<String>) {
     let frontend_state = FrontendState {
+        message: frontend_message,
         output_dir: output_dir(app).to_str().unwrap().into(),
         backend_state: backend_state.clone(),
     };
@@ -292,45 +320,91 @@ fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String,
 
 #[derive(Serialize, Deserialize, Clone)]
 enum SyncMessage {
-    Cancel
+    Sync,
+    Cancel,
 }
 
 type SyncSender = std::sync::mpsc::Sender<SyncMessage>;
 type SyncReceiver = std::sync::mpsc::Receiver<SyncMessage>;
 
 struct SyncItem {
+    student: Student,
     timestamp: Zoned,
     url: reqwest::Url,
     object_id: String,
     extension: String,
 }
 
-fn run_sync(output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
+fn run_sync_engine(output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
     let exiftool_path: PathBuf = "../exiftool/exiftool".into();
     println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
     let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
 
-    let mut syncer = Syncer {
+    let mut sync_engine = SyncEngine {
         output_root,
         bw_client,
         sync_receiver,
         backend_sender,
-        exif_tool
+        exif_tool,
+        download_items: VecDeque::new()
     };
-    syncer.sync();
+    sync_engine.run();
 }
 
-
-struct Syncer {
+struct SyncEngine {
     output_root: PathBuf,
     bw_client: BrightwheelClient,
     sync_receiver: SyncReceiver,
     backend_sender: BackendSender,
     exif_tool: ExifTool,
+    download_items: VecDeque<SyncItem>,
 }
 
-impl Syncer {
+impl SyncEngine {
     const PAGE_SIZE: usize = 1000;
+
+    fn run(&mut self) {
+        loop {
+            if let Some(item) = self.download_items.pop_front() {
+                self.download_item(item);
+                
+                match self.sync_receiver.try_recv() {
+                    Ok(msg) => {
+                        match msg {
+                            SyncMessage::Sync => {
+                                println!("Should not receive sync message while downloading");
+                            },
+                            SyncMessage::Cancel => {
+                                self.download_items.clear();
+                            },
+                        }
+                    },
+                    Err(e) => {
+                        match e {
+                            std::sync::mpsc::TryRecvError::Empty => { },
+                            std::sync::mpsc::TryRecvError::Disconnected => {
+                                panic!("Should never get disconnected from sync engine channel");
+                            },
+                        }
+                    },
+                }
+
+                if self.download_items.is_empty() {
+                    self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
+                }
+            }
+            else {
+                match self.sync_receiver.recv().unwrap() {
+                    SyncMessage::Sync => {
+                        self.sync();
+                    },
+                    SyncMessage::Cancel => {
+                        println!("Nothing to cancel");
+                    },
+                }
+            }
+        }
+    }
 
     fn sync(&mut self) {    
         // Get user_id
@@ -355,27 +429,26 @@ impl Syncer {
             std::fs::create_dir(&student_path).unwrap();
         }
 
-        let sync_items = self.get_sync_items(&student);
+        self.enqueue_sync_items(&student);
 
         println!("...done");
     }
 
-    fn get_sync_items(&mut self, student: &Student) {
+    fn enqueue_sync_items(&mut self, student: &Student) {
         println!("get_sync_items: {} {}", student.first_name, student.last_name);
 
-        let mut sync_items = Vec::new();
+        // let mut sync_items = Vec::new();
         let mut page: usize = 0;
         loop {
-            let mut sync_items_on_page = self.get_sync_items_on_page(student, page);
-            if sync_items.len() == 0 {
+            let count = self.enqueue_sync_items_on_page(student, page);
+            if count == 0 {
                 break;
             }
-            sync_items.append(&mut sync_items_on_page);
             page += 1;
         }
     }
 
-    fn get_sync_items_on_page(&mut self, student: &Student, page: usize) -> Vec<SyncItem> {
+    fn enqueue_sync_items_on_page(&mut self, student: &Student, page: usize) -> usize {
         let response_json = self.bw_client.get_students_activities(
             student.object_id.clone(), Self::PAGE_SIZE, page
         ).json::<Value>().unwrap();
@@ -389,12 +462,18 @@ impl Syncer {
         let activities = response_obj.get("activities").unwrap().as_array().unwrap();
         println!("# activities: {}", activities.len());
 
-        activities.iter().filter_map(|activity_val| {
-            self.get_sync_item_for_activity(activity_val.as_object().unwrap())
-        }).collect()
+        let mut count: usize = 0;
+        for activity in activities {
+            if let Some(item) = self.get_sync_item_for_activity(student, activity.as_object().unwrap()) {
+                self.download_items.push_back(item);
+                count += 1;
+            }
+        }
+
+        count
     }
 
-    fn get_sync_item_for_activity(&mut self, activity: &Map<String, Value>) -> Option<SyncItem> {
+    fn get_sync_item_for_activity(&mut self, student: &Student, activity: &Map<String, Value>) -> Option<SyncItem> {
         let timestamp = get_created_at(activity);
         let object_id = get_object_id(activity);
 
@@ -414,6 +493,7 @@ impl Syncer {
 
         url_ext_opt.map(|(url, extension)| {
             SyncItem {
+                student: student.clone(),
                 timestamp,
                 url,
                 object_id,
@@ -421,12 +501,36 @@ impl Syncer {
             }
         })
     }
+
+    fn download_item(&mut self, item: SyncItem) {
+        println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
+        
+        let student_path = create_student_path(&self.output_root, &item.student);
+        let month_path = create_month_path(&student_path, &item.timestamp);
+        let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
+        let dst_path = month_path.join(filename);
+
+        println!("{:?}", dst_path);
+        if dst_path.exists() {
+            println!("...already exists; skipping");
+        }
+        else {
+            println!("...downloading...");
+            self.backend_sender.send(BackendMessage::DownloadStarted(dst_path.clone())).unwrap();
+            self.bw_client.download_file(&item.url, &dst_path);
+            println!("...done.");
+        }
+    }
+
+    fn log_to_frontend(&self, msg: String) {
+        self.backend_sender.send(BackendMessage::LogToFrontend(msg)).unwrap();
+    }
 }
 
-fn sync(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState) -> BackendState {
+fn sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
     match state {
         BackendState::LoggedIn(logged_in_state) => {
-            logged_in_state.sync(app, bw_client)
+            logged_in_state.sync(sync_sender)
         },
         _ => {
             BackendState::UnexpectedError(format!("Unexpected state for sync: {:?}", state))
@@ -434,10 +538,43 @@ fn sync(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState)
     }
 }
 
+fn cancel_sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
+    match state {
+        BackendState::Syncing(syncing_state) => {
+            syncing_state.cancel_sync(sync_sender)
+        },
+        _ => {
+            BackendState::UnexpectedError(format!("Unexpected state for cancel sync: {:?}", state))
+        }
+    }
+}
+
+fn sync_complete(state: BackendState) -> BackendState {
+    match state {
+        BackendState::Syncing(syncing_state) => {
+            syncing_state.sync_complete()
+        },
+        _ => {
+            BackendState::UnexpectedError(format!("Unexpected state for cancel sync: {:?}", state))
+        }
+    }
+}
+
 impl LoggedInState {
-    fn sync(self, app: &AppHandle, bw_client: &mut BrightwheelClient) -> BackendState {
-        sync_all(app, bw_client);
-        BackendState::LoggedIn(LoggedInState {  })
+    fn sync(self, sync_sender: &SyncSender) -> BackendState {
+        sync_sender.send(SyncMessage::Sync).unwrap();
+        BackendState::Syncing(SyncingState { })
+    }
+}
+
+impl SyncingState {
+    fn cancel_sync(self, sync_sender: &SyncSender) -> BackendState {
+        sync_sender.send(SyncMessage::Cancel).unwrap();
+        BackendState::LoggedIn(LoggedInState { })
+    }
+
+    fn sync_complete(self) -> BackendState {
+        BackendState::LoggedIn(LoggedInState { })
     }
 }
 
@@ -584,13 +721,21 @@ fn get_created_at(obj: &Map<String, Value>) -> Zoned {
     timestamp.in_tz("America/Los_Angeles").unwrap()
 }
 
-fn get_month_path(path: &PathBuf, ts: &Zoned) -> PathBuf {
+fn get_month_path(root_dir: &PathBuf, ts: &Zoned) -> PathBuf {
     let month_str = ts.strftime("%Y-%m").to_string();
-    path.join(month_str)
+    root_dir.join(month_str)
 }
 
-fn create_month_path(path: &PathBuf, ts: &Zoned) -> PathBuf {
-    let month_path = get_month_path(path, ts);
+fn create_student_path(root_dir: &PathBuf, student: &Student) -> PathBuf {
+    let student_path = root_dir.join(format!("{} {}", student.first_name, student.last_name));
+    if !student_path.exists() {
+        std::fs::create_dir(&student_path).unwrap();
+    }
+    student_path
+}
+
+fn create_month_path(root_dir: &PathBuf, ts: &Zoned) -> PathBuf {
+    let month_path = get_month_path(root_dir, ts);
     if !month_path.exists() {
         std::fs::create_dir(&month_path).unwrap();
     }
