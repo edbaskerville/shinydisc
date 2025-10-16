@@ -434,12 +434,6 @@ impl SyncEngine {
 
     fn sync_student(&mut self, student: Student) {
         println!("sync_student: {} {}", student.first_name, student.last_name);
-
-        let student_path = self.output_root.join(format!("{} {}", student.first_name, student.last_name));
-        if !student_path.exists() {
-            std::fs::create_dir(&student_path).unwrap();
-        }
-
         self.enqueue_sync_items(&student);
 
         println!("...done");
@@ -757,7 +751,7 @@ fn get_month_path(root_dir: &PathBuf, ts: &Zoned) -> PathBuf {
 fn create_student_path(root_dir: &PathBuf, student: &Student) -> PathBuf {
     let student_path = root_dir.join(format!("{} {}", student.first_name, student.last_name));
     if !student_path.exists() {
-        std::fs::create_dir(&student_path).unwrap();
+        std::fs::create_dir_all(&student_path).unwrap();
     }
     student_path
 }
@@ -765,7 +759,7 @@ fn create_student_path(root_dir: &PathBuf, student: &Student) -> PathBuf {
 fn create_month_path(root_dir: &PathBuf, ts: &Zoned) -> PathBuf {
     let month_path = get_month_path(root_dir, ts);
     if !month_path.exists() {
-        std::fs::create_dir(&month_path).unwrap();
+        std::fs::create_dir_all(&month_path).unwrap();
     }
     month_path
 }
