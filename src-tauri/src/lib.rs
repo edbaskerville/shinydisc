@@ -130,10 +130,11 @@ fn run_backend(sender: std::sync::mpsc::Sender<BackendMessage>, receiver: std::s
     // Launch sync engine thread
     let (sync_sender, sync_receiver) = std::sync::mpsc::channel();
     {
-        let output_root = output_dir(&app);
+        let app_2 = app.clone();
+        let output_root = output_dir(&app_2);
         let bw_client = bw_client.clone();
         std::thread::spawn(move || {
-            run_sync_engine(output_root, bw_client, sync_receiver, sender);
+            run_sync_engine(app_2, output_root, bw_client, sync_receiver, sender);
         });
     }
 
@@ -346,8 +347,8 @@ struct SyncItem {
     extension: String,
 }
 
-fn run_sync_engine(output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
-    let exiftool_path: PathBuf = "../exiftool/exiftool".into();
+fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
+    let exiftool_path: PathBuf = app.path().resource_dir().unwrap().join("exiftool").join("exiftool");
     println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
     let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
 
