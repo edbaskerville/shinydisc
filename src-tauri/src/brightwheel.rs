@@ -1,24 +1,12 @@
-use std::{collections::HashMap, io::{BufRead, Read}, path::PathBuf, sync::{Arc, Mutex}, time::Duration};
-
-use map_macro::hash_map;
+use std::{path::PathBuf, sync::{Arc}, time::Duration};
 
 const URL_BASE: &str = "https://schools.mybrightwheel.com/api/v1/";
 
 const COOKIE_NAME: &str = "_brightwheel_v2";
 const COOKIE_DOMAIN: &str = ".mybrightwheel.com";
 
-
-const AUTH_HEADERS_JSON: &str = r#"{
-    "Content-Type": "application/json",
-    "X-Client-Version": "106",
-    "X-Client-Name": "web",
-    "Origin": "https://schools.mybrightwheel.com",
-    "Referer": "https://schools.mybrightwheel.com/sign-in",
-    "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0"
-}"#;
-
 use reqwest::{
-    blocking::{Client, Response}, cookie::{self, Jar}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
+    blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
 };
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};

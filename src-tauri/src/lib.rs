@@ -1,13 +1,13 @@
 
 pub mod brightwheel;
 
-use std::{collections::VecDeque, path::{self, Path, PathBuf}, str::FromStr, sync::Arc};
+use std::{collections::VecDeque, path::{PathBuf}, str::FromStr, sync::Arc};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use tauri::{AppHandle, Builder, Emitter, Manager, State};
+use tauri::{AppHandle, Builder, Emitter, Manager};
 
 use exiftool::ExifTool;
 
@@ -115,7 +115,7 @@ pub fn run() {
     app.run(|_app, _event| { });
 }
 
-fn run_backend(sender: std::sync::mpsc::Sender<BackendMessage>, receiver: std::sync::mpsc::Receiver<BackendMessage>, app: AppHandle) {
+fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
     let (already_logged_in, cookie_store) = init_cookie_store(&app);
     let mut bw_client = BrightwheelClient::new(cookie_store);
     let mut state = if already_logged_in {
@@ -350,7 +350,7 @@ struct SyncItem {
 fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
     let exiftool_path: PathBuf = app.path().resource_dir().unwrap().join("exiftool").join("exiftool");
     println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
-    let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
+    let exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
 
     let mut sync_engine = SyncEngine {
         output_root,
@@ -601,136 +601,6 @@ impl SyncCancelingState {
     }
 }
 
-fn sync_all(app: &AppHandle, bw_client: &mut BrightwheelClient) {
-    let exiftool_path: PathBuf = "../exiftool/exiftool".into();
-    println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
-    let mut exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
-
-    // Get user_id
-    let user_id = bw_client.get_user_id();
-    println!("got user_id: {}", user_id);
-
-    // Get list of students;
-    let user_id_2 = user_id.clone();
-    let students = bw_client.get_students(user_id_2);
-
-    // Sync each student
-    for student in students {
-        sync_student(app, &bw_client, &mut exif_tool, student);
-    }
-}
-
-fn sync_student(app: &AppHandle, bw_client: &BrightwheelClient, exif_tool: &mut ExifTool, student: Student) {
-    println!("sync_student: {} {}", student.first_name, student.last_name);
-
-    let student_path = output_dir(app).join(format!("{} {}", student.first_name, student.last_name));
-    if !student_path.exists() {
-        std::fs::create_dir(&student_path).unwrap();
-    }
-
-    let page_size: usize = 1000;
-    let mut page: usize = 0;
-
-    while download_activities(bw_client, &student, page_size, page, &student_path) {
-        page += 1;
-    }
-
-    println!("Updating exif data for student...");
-    let output = exif_tool.execute_lines(&[
-        "-r", "-overwrite_original", "-alldates<filename",
-        "-gpsposition=37.78401801046647, -122.50330791369049",
-        student_path.to_str().unwrap()
-    ]).unwrap();
-    for line in output {
-        println!("{}", line);
-    }
-    println!("...done");
-}
-
-fn download_activities(bw_client: &BrightwheelClient, student: &Student, page_size: usize, page: usize, path: &PathBuf) -> bool {
-    println!("download_activities: {} {}, page {}", student.first_name, student.last_name, page);
-
-    let response_json = bw_client.get_students_activities(
-        student.object_id.clone(), page_size, page
-    ).json::<Value>().unwrap();
-    let response_obj = response_json.as_object().unwrap();
-    println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
-
-    let page = response_obj.get("page").unwrap().as_u64().unwrap() as usize;
-    let page_size = response_obj.get("page_size").unwrap().as_u64().unwrap() as usize;
-    println!("page, page_size: {}, {}", page, page_size);
-
-    let activities = response_obj.get("activities").unwrap().as_array().unwrap();
-    println!("# activities: {}", activities.len());
-    for (i, activity_val) in activities.iter().enumerate() {
-        let activity = activity_val.as_object().unwrap();
-        println!("page {}, item {}", page, i);
-        println!("activity keys: {:?}", Vec::from_iter(activity.keys().into_iter()));
-        if activity.get("media").unwrap().is_object() {
-            println!("found media");
-            download_photo(bw_client, student, path, activity);
-        }
-        else if activity.get("video_info").unwrap().is_object() {
-            println!("found video_info");
-            download_video(bw_client, student, path, activity);
-        }
-        // println!("activity keys: {:?}", Vec::from_iter(activity.keys().into_iter()));
-        // println!("activity: {:?}", activity);
-
-        // if(i > 10) {
-        //     break;
-        // }
-    }
-
-    activities.len() == page_size
-}
-
-fn download_photo(bw_client: &BrightwheelClient, student: &Student, path: &PathBuf, activity: &Map<String, Value>) {
-    let timestamp = get_created_at(activity);
-    println!("timestamp: {:?}", timestamp);
-    let object_id = get_object_id(activity);
-    let month_path = create_month_path(path, &timestamp);
-    let photo_info = activity.get("media").unwrap().as_object().unwrap();
-    // println!("{}\n", to_json_debug(photo_info));
-
-    let src_url = reqwest::Url::parse(photo_info.get("image_url").unwrap().as_str().unwrap()).unwrap();
-    let filename = format_filename(&timestamp, &object_id, "jpg");
-    let dst_path = month_path.join(filename);
-
-    println!("{:?}", dst_path);
-    if dst_path.exists() {
-        println!("...already exists; skipping");
-    }
-    else {
-        println!("...downloading...");
-        bw_client.download_file(&src_url, &dst_path);
-        println!("...done.");
-    }
-}
-
-fn download_video(bw_client: &BrightwheelClient, student: &Student, path: &PathBuf, activity: &Map<String, Value>) {
-    let timestamp = get_created_at(activity);
-    let object_id = get_object_id(activity);
-    let month_path = create_month_path(path, &timestamp);
-    let video_info = activity.get("video_info").unwrap().as_object().unwrap();
-    println!("{}\n", to_json_debug(video_info));
-
-    let src_url = reqwest::Url::parse(video_info.get("downloadable_url").unwrap().as_str().unwrap()).unwrap();
-    let filename = format_filename(&timestamp, &object_id, "mp4");
-    let dst_path = month_path.join(filename);
-
-    println!("{:?}", dst_path);
-    if dst_path.exists() {
-        println!("...already exists; skipping");
-    }
-    else {
-        println!("...downloading...");
-        bw_client.download_file(&src_url, &dst_path);
-        println!("...done.");
-    }
-}
-
-
 fn format_filename(timestamp: &Zoned, object_id: &str, extension: &str) -> String {
     format!("{}-{}.{}", timestamp.strftime("%F-%H%M%S").to_string(), object_id, extension)
 }
@@ -818,6 +688,7 @@ fn default_output_dir(app: &AppHandle) -> PathBuf {
     app.path().picture_dir().unwrap().join("shinydisc")
 }
 
+#[allow(deprecated)]
 fn write_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
     let mut writer = std::fs::File::create(cookies_path(app))
       .map(std::io::BufWriter::new)
@@ -829,6 +700,7 @@ fn to_json_debug<S: Serialize>(x: &S) -> String {
     serde_json::to_string_pretty(x).unwrap()
 }
 
+#[allow(deprecated)]
 fn init_cookie_store(app: &AppHandle) -> (bool, reqwest_cookie_store::CookieStore) {
     if let Ok(file) = std::fs::File::open(cookies_path(app))
         .map(std::io::BufReader::new) {
