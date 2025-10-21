@@ -24,7 +24,7 @@ pub struct Student {
 
 impl BrightwheelClient {
     fn make_client(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Client{
-        Client::builder().cookie_provider(cookie_store_arc_mutex).build().unwrap()
+        Client::builder().cookie_provider(cookie_store_arc_mutex).timeout(Duration::from_secs(5)).build().unwrap()
     }
 
     pub fn new(cookie_store: reqwest_cookie_store::CookieStore) -> Self {
@@ -55,39 +55,39 @@ impl BrightwheelClient {
         }
     }
 
-    pub fn post_sessions_start(&self, email: String, password: String) -> Response {
+    pub fn post_sessions_start(&self, email: String, password: String) -> reqwest::Result<Response> {
         let request = self.client.post(
             format!("{}/sessions/start", URL_BASE)
         )
             .headers(self.auth_headers.clone())
             .json(&Self::authentication_json(email, password, None))
             .build().unwrap();
-        self.client.execute(request).unwrap()
+        self.client.execute(request)
     }
 
-    pub fn post_sessions(&self, email: String, password: String, mfa_code_opt: Option<String>) -> Response {
+    pub fn post_sessions(&self, email: String, password: String, mfa_code_opt: Option<String>) -> reqwest::Result<Response> {
         let request = self.client.post(
             format!("{}/sessions", URL_BASE)
         )
             .headers(self.auth_headers.clone())
             .json(&Self::authentication_json(email, password, mfa_code_opt))
             .build().unwrap();
-        self.client.execute(request).unwrap()
+        self.client.execute(request)
     }
 
-    pub fn get_users_me(&self) -> Response {
+    pub fn get_users_me(&self) -> reqwest::Result<Response> {
         let request = self.client.get(format!("{}/users/me", URL_BASE)).build().unwrap();
-        self.client.execute(request).unwrap()
+        self.client.execute(request)
     }
 
-    pub fn get_user_id(&self) -> String {
-        let response: Response = self.get_users_me();
+    pub fn get_user_id(&self) -> reqwest::Result<String> {
+        let response: Response = self.get_users_me()?;
         let json = response.json::<Value>().unwrap();
         println!("users/me json: {:?}", json);
         match json {
             Value::Object(obj) => {
                 match obj.get("object_id").unwrap() {
-                    Value::String(user_id) => user_id.clone(),
+                    Value::String(user_id) => Ok(user_id.clone()),
                     _ => panic!()
                 }
             },
@@ -95,17 +95,19 @@ impl BrightwheelClient {
         }
     }
 
-    pub fn get_guardians_students(&self, user_id: String) -> Response {
+    pub fn get_guardians_students(&self, user_id: String) -> reqwest::Result<Response> {
         let request = self.client.get(format!("{}/guardians/{}/students", URL_BASE, user_id)).build().unwrap();
-        self.client.execute(request).unwrap()
+        self.client.execute(request)
     }
 
-    pub fn get_students(&self, user_id: String) -> Vec<Student> {
-        let response = self.get_guardians_students(user_id.clone());
+    pub fn get_students(&self, user_id: String) -> reqwest::Result<Vec<Student>> {
+        // TODO: handle parse errors
+
+        let response = self.get_guardians_students(user_id.clone())?;
         let json = response.json::<Value>().unwrap();
         println!("guardians/{}/students json: {:?}", user_id, json);
 
-        Vec::from_iter(
+        Ok(Vec::from_iter(
             match &json {
                 Value::Object(obj) => {
                     match obj.get("students").unwrap() {
@@ -137,16 +139,16 @@ impl BrightwheelClient {
                 },
                 _ => panic!()
             }
-        )
+        ))
     }
 
-    pub fn get_students_activities(&self, student_id: String, page_size: usize, page: usize) -> Response {
+    pub fn get_students_activities(&self, student_id: String, page_size: usize, page: usize) -> reqwest::Result<Response> {
         let request = self.client.get(
             format!("{}/students/{}/activities", URL_BASE, student_id)
         ).query(
             &[("page_size", page_size), ("page", page)]
         ).build().unwrap();
-        self.client.execute(request).unwrap()
+        self.client.execute(request)
     }
 
     fn authentication_json(email: String, password: String, mfa_code_opt: Option<String>) -> Value {
@@ -163,15 +165,15 @@ impl BrightwheelClient {
         json_val
     }
 
-    pub fn download_file(&self, src_url: &reqwest::Url, dst_path: &PathBuf) {
+    pub fn download_file(&self, src_url: &reqwest::Url, dst_path: &PathBuf) -> reqwest::Result<()> {
         let request = self.client.get(
             src_url.clone()
-        ).timeout(
-            Duration::from_secs(100)
         ).build().unwrap();
         let mut file: std::fs::File = std::fs::File::create(dst_path).unwrap();
-        let mut response = self.client.execute(request).unwrap();
+        let mut response = self.client.execute(request)?;
         response.copy_to(&mut file).unwrap();
+
+        Ok(())
     }
 }
 

@@ -30,7 +30,6 @@ enum BackendState {
     LoggedIn(LoggedInState),
     Syncing(SyncingState),
     SyncCanceling(SyncCancelingState),
-    UnexpectedError(String),
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,11 +56,6 @@ struct SyncingState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SyncCancelingState {
 
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct UnexpectedErrorState {
-    message: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -92,6 +86,7 @@ enum BackendMessage {
         count: usize,
     },
     SyncComplete,
+    SyncError(String),
     CancelSync,
     SyncCanceled,
     LogToFrontend(String),
@@ -229,6 +224,10 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 state = sync_complete(state);
                 Some("Sync complete".to_string())
             },
+            BackendMessage::SyncError(message) => {
+                state = sync_error(state);
+                Some(message)
+            },
             BackendMessage::CancelSync => {
                 state = cancel_sync(state, &sync_sender);
                 Some("Cancelling...".to_string())
@@ -295,45 +294,53 @@ fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message:
 
 impl LoggedOutState {
     fn log_in(self, app: &AppHandle, bw_client: &mut BrightwheelClient, email: String, password: String) -> (BackendState, String) {
-        let response = bw_client.post_sessions_start(email.clone(), password.clone());
-        
-        match response.json::<serde_json::Value>() {
-            Ok(response_json) => { 
-                match response_json {
-                    serde_json::Value::Object(response_obj) => {
-                        if let Some(mfa_required_val) = response_obj.get("2fa_required") {
-                            if let Some(mfa_required) = mfa_required_val.as_bool() {
-                                if mfa_required {
-                                    (
-                                        BackendState::NeedsMfa(NeedsMfaState {
-                                            email, password, message: None
-                                        }),
-                                        "Check your email for authentication code".into()
-                                    )
+        match bw_client.post_sessions_start(email.clone(), password.clone()) {
+            Ok(response) => {
+                match response.json::<serde_json::Value>() {
+                    Ok(response_json) => {
+                        match response_json {
+                            serde_json::Value::Object(response_obj) => {
+                                if let Some(mfa_required_val) = response_obj.get("2fa_required") {
+                                    if let Some(mfa_required) = mfa_required_val.as_bool() {
+                                        if mfa_required {
+                                            (
+                                                BackendState::NeedsMfa(NeedsMfaState {
+                                                    email, password, message: None
+                                                }),
+                                                "Check your email for authentication code".into()
+                                            )
+                                        }
+                                        else {
+                                            complete_login(app, bw_client, email, password, None)
+                                        }
+                                    }
+                                    else {
+                                        (
+                                            BackendState::LoggedOut(LoggedOutState {  }),
+                                            "2fa_required is not a bool???".into()
+                                        )
+                                    }
                                 }
                                 else {
-                                    complete_login(app, bw_client, email, password, None)
+                                    // TODO: this might actually be a login failure
+                                    (
+                                        BackendState::LoggedIn(LoggedInState {}),
+                                        "Logged in".into()
+                                    )
                                 }
                             }
-                            else {
+                            _ => {
                                 (
-                                    BackendState::LoggedOut(LoggedOutState {  }),
-                                    "2fa_required is not a bool???".into()
+                                    BackendState::LoggedOut(LoggedOutState {}),
+                                    "received non-object response from brightwheel login endpoint".into()
                                 )
                             }
                         }
-                        else {
-                            // TODO: this might actually be a login failure
-                            (
-                                BackendState::LoggedIn(LoggedInState {}),
-                                "Logged in".into()
-                            )
-                        }
-                    }
-                    _ => {
+                    },
+                    Err(e) => {
                         (
                             BackendState::LoggedOut(LoggedOutState {}),
-                            "received non-object response from brightwheel login endpoint".into()
+                            format!("received error parsing JSON: {:?}", e)
                         )
                     }
                 }
@@ -356,23 +363,42 @@ impl NeedsMfaState {
 
 
 fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> (BackendState, String) {
-    let response = bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone());
-    let response_json = response.json::<serde_json::Value>().unwrap();
-    println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
-    match response_json {
-        serde_json::Value::Object(response_obj) => {
-            // TODO: could be invalid response??
-            write_cookies(app, &bw_client.cookie_store_arc_mutex);
-            
-            (
-                BackendState::LoggedIn(LoggedInState { }),
-                "Logged in.".into()
-            )
+    match bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone()) {
+        Ok(response) => {
+            match response.json::<serde_json::Value>() {
+                Ok(response_json) => {
+                    println!("response_json: {}", response_json);
+                    println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
+                    match response_json {
+                        serde_json::Value::Object(response_obj) => {
+                            // TODO: could be invalid response??
+                            write_cookies(app, &bw_client.cookie_store_arc_mutex);
+                            
+                            (
+                                BackendState::LoggedIn(LoggedInState { }),
+                                "Logged in.".into()
+                            )
+                        },
+                        _ => {
+                            (
+                                BackendState::LoggedOut(LoggedOutState { }),
+                                "Received non-object response from brightwheel login endpoint".into()
+                            )
+                        }
+                    }
+                },
+                Err(e) => {
+                    (
+                        BackendState::LoggedOut(LoggedOutState { }),
+                        format!("Login received error decoding JSON: {:?}", e),
+                    )
+                }
+            }
         },
-        _ => {
+        Err(e) => {
             (
                 BackendState::LoggedOut(LoggedOutState { }),
-                "Received non-object response from brightwheel login endpoint".into()
+                format!("Login received error from HTTP request: {:?}", e),
             )
         }
     }
@@ -430,73 +456,94 @@ impl SyncEngine {
 
     fn run(&mut self) {
         loop {
-            if self.sync_next_item() {
-                match self.sync_receiver.try_recv() {
-                    Ok(msg) => {
-                        match msg {
+            match self.sync_next_item() {
+                Ok(synced) => {
+                    if synced {
+                        match self.sync_receiver.try_recv() {
+                            Ok(msg) => {
+                                match msg {
+                                    SyncMessage::Sync => {
+                                        println!("Should not receive sync message while downloading");
+                                    },
+                                    SyncMessage::Cancel => {
+                                        self.sync_index = 0;
+                                        self.sync_items.clear();
+                                        self.backend_sender.send(BackendMessage::SyncCanceled).unwrap();
+                                    },
+                                }
+                            },
+                            Err(e) => {
+                                match e {
+                                    std::sync::mpsc::TryRecvError::Empty => { },
+                                    std::sync::mpsc::TryRecvError::Disconnected => {
+                                        panic!("Should never get disconnected from sync engine channel");
+                                    },
+                                }
+                            },
+                        }
+                    }
+                    else {
+                        match self.sync_receiver.recv().unwrap() {
                             SyncMessage::Sync => {
-                                println!("Should not receive sync message while downloading");
+                                if let Err(e) = self.sync() {
+                                    self.sync_index = 0;
+                                    self.sync_items.clear();
+                                    self.backend_sender.send(BackendMessage::SyncError(
+                                        format!("Received error syncing: {:?}", e))
+                                    ).unwrap();
+                                }
                             },
                             SyncMessage::Cancel => {
-                                self.sync_index = 0;
-                                self.sync_items.clear();
-                                self.backend_sender.send(BackendMessage::SyncCanceled).unwrap();
+                                println!("Nothing to cancel");
                             },
                         }
-                    },
-                    Err(e) => {
-                        match e {
-                            std::sync::mpsc::TryRecvError::Empty => { },
-                            std::sync::mpsc::TryRecvError::Disconnected => {
-                                panic!("Should never get disconnected from sync engine channel");
-                            },
-                        }
-                    },
-                }
-            }
-            else {
-                match self.sync_receiver.recv().unwrap() {
-                    SyncMessage::Sync => {
-                        self.sync();
-                    },
-                    SyncMessage::Cancel => {
-                        println!("Nothing to cancel");
-                    },
+                    }
+                },
+                Err(e) => {
+                    self.sync_index = 0;
+                    self.sync_items.clear();
+                    self.backend_sender.send(BackendMessage::SyncError(
+                        format!("Received error syncing: {:?}", e))
+                    ).unwrap();
                 }
             }
         }
     }
 
-    fn sync(&mut self) {    
+    fn sync(&mut self) -> reqwest::Result<()> {    
         // Get user_id
-        let user_id = self.bw_client.get_user_id();
+        let user_id = self.bw_client.get_user_id()?;
         println!("got user_id: {}", user_id);
 
         // Get list of students;
         let user_id_2 = user_id.clone();
-        let students = self.bw_client.get_students(user_id_2);
+        let students = self.bw_client.get_students(user_id_2)?;
 
         // Sync each student
         for student in students {
-            self.sync_student(student);
+            self.sync_student(student)?;
         }
+
+        Ok(())
     }
 
-    fn sync_student(&mut self, student: Student) {
+    fn sync_student(&mut self, student: Student) -> reqwest::Result<()> {
         println!("sync_student: {} {}", student.first_name, student.last_name);
-        self.enqueue_sync_items(&student);
+        self.enqueue_sync_items(&student)?;
 
         println!("...done");
+
+        Ok(())
     }
 
-    fn enqueue_sync_items(&mut self, student: &Student) {
-        println!("get_sync_items: {} {}", student.first_name, student.last_name);
+    fn enqueue_sync_items(&mut self, student: &Student) -> reqwest::Result<()> {
+        println!("enqueue_sync_items: {} {}", student.first_name, student.last_name);
 
         // let mut sync_items = Vec::new();
         let mut page: usize = 0;
         loop {
             self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
-            let count = self.enqueue_sync_items_on_page(student, page);
+            let count = self.enqueue_sync_items_on_page(student, page)?;
             if count == 0 {
                 break;
             }
@@ -506,12 +553,15 @@ impl SyncEngine {
             }).unwrap();
             page += 1;
         }
+
+        Ok(())
     }
 
-    fn enqueue_sync_items_on_page(&mut self, student: &Student, page: usize) -> usize {
-        let response_json = self.bw_client.get_students_activities(
+    fn enqueue_sync_items_on_page(&mut self, student: &Student, page: usize) -> reqwest::Result<usize> {
+        let response = self.bw_client.get_students_activities(
             student.object_id.clone(), Self::PAGE_SIZE, page
-        ).json::<Value>().unwrap();
+        )?;
+        let response_json = response.json::<Value>()?;
         let response_obj = response_json.as_object().unwrap();
         println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
 
@@ -530,7 +580,7 @@ impl SyncEngine {
             }
         }
 
-        count
+        Ok(count)
     }
 
     fn get_sync_item_for_activity(&mut self, student: &Student, activity: &Map<String, Value>) -> Option<SyncItem> {
@@ -562,7 +612,7 @@ impl SyncEngine {
         })
     }
 
-    fn sync_next_item(&mut self) -> bool {
+    fn sync_next_item(&mut self) -> reqwest::Result<bool> {
         // println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
         
         if self.sync_index < self.sync_items.len() {
@@ -582,18 +632,20 @@ impl SyncEngine {
                 count: self.sync_items.len(),
             }).unwrap();
             if needs_download {
-                self.bw_client.download_file(&item.url, &dst_path);
+                self.bw_client.download_file(&item.url, &dst_path)?;
             }
             
             self.sync_index += 1;
             if self.sync_index == self.sync_items.len() {
+                self.sync_index = 0;
+                self.sync_items.clear();
                 self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
             }
 
-            true
+            Ok(true)
         }
         else {
-            false
+            Ok(false)
         }
     }
 
@@ -608,7 +660,8 @@ fn sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
             logged_in_state.sync(sync_sender)
         },
         _ => {
-            BackendState::UnexpectedError(format!("Unexpected state for sync: {:?}", state))
+            println!("Unexpected state for sync: {:?}", state);
+            state
         }
     }
 }
@@ -619,7 +672,8 @@ fn cancel_sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
             syncing_state.cancel_sync(sync_sender)
         },
         _ => {
-            BackendState::UnexpectedError(format!("Unexpected state for cancel sync: {:?}", state))
+            println!("Unexpected state for cancel sync: {:?}", state);
+            state
         }
     }
 }
@@ -630,7 +684,8 @@ fn sync_canceled(state: BackendState) -> BackendState {
             sync_canceling_state.sync_canceled()
         },
         _ => {
-            BackendState::UnexpectedError(format!("Unexpected state for sync canceled: {:?}", state))
+            println!("Unexpected state for sync canceled: {:?}", state);
+            state
         }
     }
 }
@@ -641,7 +696,19 @@ fn sync_complete(state: BackendState) -> BackendState {
             syncing_state.sync_complete()
         },
         _ => {
-            BackendState::UnexpectedError(format!("Unexpected state for cancel sync: {:?}", state))
+            state
+        }
+    }
+}
+
+fn sync_error(state: BackendState) -> BackendState {
+    match state {
+        BackendState::Syncing(syncing_state) => {
+            syncing_state.sync_error()
+        },
+        _ => {
+            println!("Unexpected state for sync error: {:?}", state);
+            state
         }
     }
 }
@@ -665,6 +732,10 @@ impl SyncingState {
     }
 
     fn sync_complete(self) -> BackendState {
+        BackendState::LoggedIn(LoggedInState { })
+    }
+
+    fn sync_error(self) -> BackendState {
         BackendState::LoggedIn(LoggedInState { })
     }
 }
