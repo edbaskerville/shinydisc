@@ -85,7 +85,8 @@ enum BackendMessage {
         page: usize,
         count: usize,
     },
-    DownloadStarted {
+    ProcessingItem {
+        needs_download: bool,
         path: PathBuf,
         index: usize,
         count: usize,
@@ -210,12 +211,19 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             BackendMessage::QueriedItems { page, count } => {
                 Some(format!("Query found {} items on page {}", count, page + 1)) 
             },
-            BackendMessage::DownloadStarted {
+            BackendMessage::ProcessingItem {
+                needs_download,
                 path,
                 index,
                 count,
             } => {
-                Some(format!("{} ({}/{})", path.to_str().unwrap().to_string(), index + 1, count))
+                let base_msg = format!("{} ({}/{})", path.to_str().unwrap().to_string(), index + 1, count);
+                if needs_download {
+                    Some(base_msg)
+                }
+                else {
+                    Some(format!("{} - already downloaded", base_msg))
+                }
             },
             BackendMessage::SyncComplete => {
                 state = sync_complete(state);
@@ -566,18 +574,15 @@ impl SyncEngine {
             let dst_path = month_path.join(filename);
 
             println!("{:?}", dst_path);
-            if dst_path.exists() {
-                println!("...already exists; skipping");
-            }
-            else {
-                println!("...downloading...");
-                self.backend_sender.send(BackendMessage::DownloadStarted {
-                    path: dst_path.clone(),
-                    index: self.sync_index,
-                    count: self.sync_items.len(),
-                }).unwrap();
+            let needs_download = !dst_path.exists();
+            self.backend_sender.send(BackendMessage::ProcessingItem {
+                needs_download,
+                path: dst_path.clone(),
+                index: self.sync_index,
+                count: self.sync_items.len(),
+            }).unwrap();
+            if needs_download {
                 self.bw_client.download_file(&item.url, &dst_path);
-                println!("...done.");
             }
             
             self.sync_index += 1;
