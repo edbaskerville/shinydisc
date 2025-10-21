@@ -171,7 +171,7 @@ impl BrightwheelClient {
         ).build().unwrap();
         let mut file: std::fs::File = std::fs::File::create(dst_path).unwrap();
         let mut response = self.client.execute(request)?;
-        response.copy_to(&mut file).unwrap();
+        response.copy_to(&mut file)?;
 
         Ok(())
     }
