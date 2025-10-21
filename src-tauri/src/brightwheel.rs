@@ -45,7 +45,7 @@ impl BrightwheelClient {
             ),
             (ORIGIN, HeaderValue::from_str("https://schools.mybrightwheel.com").unwrap()),
             (REFERER, HeaderValue::from_str("https://schools.mybrightwheel.com/sign-in").unwrap()),
-            (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0").unwrap()),
+            // (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0").unwrap()),
         ].into_iter());
 
         Self {
