@@ -12,6 +12,7 @@ let outputDirEl;
 let mfaInput;
 let mfaMsgEl;
 let cancelSyncBtn;
+let logOutBtn;
 let state;
 
 export function setTab(targetTabName) {
@@ -70,7 +71,7 @@ listen('update-state', (event) => {
 function updateViewFromState() {
   let backendState = state.backend_state;
 
-  if(backendState["NeedsLogIn"]) {
+  if(backendState["LoggedOut"]) {
     setTab("login");
   }
   else if(backendState["NeedsMfa"]) {
@@ -90,25 +91,20 @@ function updateViewFromState() {
   }
 
   messageEl.innerText = state.message;
-  outputDirEl.value = state.output_dir;
+  outputDirEl.innerText = state.output_dir;
 }
 
 /*
   Send login information to backend
 */
-function login() {
+function logIn() {
   sendBackendMessage({
     "LogIn" : {
       email: emailInput.value,
       password: pwInput.value
     }
   });
-  // let result = invoke("login", { email: emailInput.value, password: pwInput.value });
-  // console.log("login result:", result);
-  // if(result.message) {
-  //   loginMsgEl.textContent = result.message;
-  // }
-  // setTab(result.tab_name);
+  pwInput.value = "";
 }
 
 /*
@@ -125,14 +121,12 @@ listen('login-response', (event) => {
 });
 
 
-function login_mfa() {
+function logInMfa() {
   sendBackendMessage({
     "LogInMfa" : {
       "mfa_code": mfaInput.value
     }
   });
-  // let result = invoke("login_mfa", { email: emailInput.value, password: pwInput.value, mfaCode: mfaInput.value });
-  // console.log("login_mfa result:", result);
 }
 
 listen('login-mfa-response', (event) => {
@@ -144,6 +138,15 @@ listen('login-mfa-response', (event) => {
   // }
   // setTab(result.tab_name);
 });
+
+/*
+  Ask backend to log out
+*/
+function logOut() {
+  sendBackendMessage({
+    "LogOut" : null
+  });
+}
 
 function chooseOutputPathSync() {
   chooseOutputPath().then(() => {
@@ -181,19 +184,24 @@ window.addEventListener("DOMContentLoaded", () => {
   mfaInput = document.querySelector("#mfa-input");
   loginMsgEl = document.querySelector("#login-error-p");
   messageEl = document.querySelector("#message-p");
-  outputDirEl = document.querySelector("#output-dir-input")
+  outputDirEl = document.querySelector("#output-dir-p")
   mfaMsgEl = document.querySelector("#mfa-error-p");
   cancelSyncBtn = document.getElementById("cancel-sync-btn");
+  logOutBtn = document.getElementById("log-out-btn");
   console.log(cancelSyncBtn);
+
+  logOutBtn.addEventListener("click", (e) => {
+    logOut();
+  });
 
   document.querySelector("#login-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    login();
+    logIn();
   });
 
   document.querySelector("#mfa-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    login_mfa();
+    logInMfa();
   });
 
   document.querySelector("#choose-folder-button").addEventListener("click", (e) => {

@@ -1,9 +1,6 @@
 use std::{path::PathBuf, sync::{Arc}, time::Duration};
 
-const URL_BASE: &str = "https://schools.mybrightwheel.com/api/v1/";
-
-const COOKIE_NAME: &str = "_brightwheel_v2";
-const COOKIE_DOMAIN: &str = ".mybrightwheel.com";
+const URL_BASE: &str = "https://schools.mybrightwheel.com/api/v1";
 
 use reqwest::{
     blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}

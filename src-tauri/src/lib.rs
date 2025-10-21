@@ -1,7 +1,7 @@
 
 pub mod brightwheel;
 
-use std::{collections::VecDeque, path::{PathBuf}, str::FromStr, sync::Arc};
+use std::{path::{PathBuf}, str::FromStr, sync::Arc};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -25,7 +25,7 @@ struct FrontendState {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BackendState {
-    NeedsLogin(NeedsLoginState),
+    LoggedOut(LoggedOutState),
     NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
     Syncing(SyncingState),
@@ -34,8 +34,7 @@ enum BackendState {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct NeedsLoginState {
-    message: Option<String>,
+struct LoggedOutState {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -76,9 +75,21 @@ enum BackendMessage {
     LogInMfa {
         mfa_code: String,
     },
+    LogOut,
     SetOutputDir(String),
     Sync,
-    DownloadStarted(PathBuf),
+    QueryingItems {
+        page: usize,
+    },
+    QueriedItems {
+        page: usize,
+        count: usize,
+    },
+    DownloadStarted {
+        path: PathBuf,
+        index: usize,
+        count: usize,
+    },
     SyncComplete,
     CancelSync,
     SyncCanceled,
@@ -122,8 +133,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
         BackendState::LoggedIn(LoggedInState {  })
     }
     else {
-        BackendState::NeedsLogin(NeedsLoginState {
-            message: None
+        BackendState::LoggedOut(LoggedOutState {
         })
     };
 
@@ -150,11 +160,13 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             },
             BackendMessage::LogIn { email, password } => {
                 match state {
-                    BackendState::NeedsLogin(needs_login_state) => {
-                        state = needs_login_state.log_in(&app, &mut bw_client, email, password);
+                    BackendState::LoggedOut(needs_login_state) => {
+                        let msg;
+                        (state, msg) = needs_login_state.log_in(&app, &mut bw_client, email, password);
+                        Some(msg)
                     },
                     _ => {
-                        log_to_frontend(&app, format!("LogIn received from wrong state: {:?}", state));
+                        Some(format!("LogIn received from wrong state: {:?}", state))
                     }
                 };
                 None
@@ -162,11 +174,24 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             BackendMessage::LogInMfa { mfa_code } => {
                 match state {
                     BackendState::NeedsMfa(needs_mfa_state) => {
-                        state = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
-                        None
+                        let msg;
+                        (state, msg) = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
+                        Some(msg)
                     },
                     _ => {
                         log_to_frontend(&app, format!("LogInMfa received from wrong state: {:?}", state));
+                        None
+                    }
+                }
+            },
+            BackendMessage::LogOut => {
+                match state {
+                    BackendState::LoggedIn(logged_in_state) => {
+                        state = logged_in_state.log_out(&app, &mut bw_client);
+                        Some("Logged out.".into())
+                    },
+                    _ => {
+                        log_to_frontend(&app, format!("LogOut received from wrong state: {:?}", state));
                         None
                     }
                 }
@@ -179,8 +204,18 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 state = sync(state, &sync_sender);
                 None
             },
-            BackendMessage::DownloadStarted(path) => {
-                Some(path.to_str().unwrap().into())
+            BackendMessage::QueryingItems { page } => {
+                Some(format!("Querying items from page {}", page + 1))
+            },
+            BackendMessage::QueriedItems { page, count } => {
+                Some(format!("Query found {} items on page {}", count, page + 1)) 
+            },
+            BackendMessage::DownloadStarted {
+                path,
+                index,
+                count,
+            } => {
+                Some(format!("{} ({}/{})", path.to_str().unwrap().to_string(), index + 1, count))
             },
             BackendMessage::SyncComplete => {
                 state = sync_complete(state);
@@ -250,68 +285,69 @@ fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message:
 
 /*** LOGIN ***/
 
-// #[derive(Serialize, Deserialize, Clone, Debug)]
-// enum LogInError {
-//     WrongState
-// }
-
-// fn log_in(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, email: String, password: String) -> Result<BackendState, LogInError> {
-//     match state {
-//     }
-// }
-
-impl NeedsLoginState {
-    fn log_in(self, app: &AppHandle, bw_client: &mut BrightwheelClient, email: String, password: String) -> BackendState {
+impl LoggedOutState {
+    fn log_in(self, app: &AppHandle, bw_client: &mut BrightwheelClient, email: String, password: String) -> (BackendState, String) {
         let response = bw_client.post_sessions_start(email.clone(), password.clone());
-        let response_json = response.json::<serde_json::Value>().unwrap();
-
-        match response_json {
-            serde_json::Value::Object(response_obj) => {
-                if let Some(mfa_required_val) = response_obj.get("2fa_required") {
-                    if let Some(mfa_required) = mfa_required_val.as_bool() {
-                        if mfa_required {
-                            BackendState::NeedsMfa(NeedsMfaState {
-                                email, password, message: None
-                            })
+        
+        match response.json::<serde_json::Value>() {
+            Ok(response_json) => { 
+                match response_json {
+                    serde_json::Value::Object(response_obj) => {
+                        if let Some(mfa_required_val) = response_obj.get("2fa_required") {
+                            if let Some(mfa_required) = mfa_required_val.as_bool() {
+                                if mfa_required {
+                                    (
+                                        BackendState::NeedsMfa(NeedsMfaState {
+                                            email, password, message: None
+                                        }),
+                                        "Check your email for authentication code".into()
+                                    )
+                                }
+                                else {
+                                    complete_login(app, bw_client, email, password, None)
+                                }
+                            }
+                            else {
+                                (
+                                    BackendState::LoggedOut(LoggedOutState {  }),
+                                    "2fa_required is not a bool???".into()
+                                )
+                            }
                         }
                         else {
-                            complete_login(app, bw_client, email, password, None)
+                            // TODO: this might actually be a login failure
+                            (
+                                BackendState::LoggedIn(LoggedInState {}),
+                                "Logged in".into()
+                            )
                         }
                     }
-                    else {
-                        BackendState::UnexpectedError("2fa_required is not a bool???".into())
+                    _ => {
+                        (
+                            BackendState::LoggedOut(LoggedOutState {}),
+                            "received non-object response from brightwheel login endpoint".into()
+                        )
                     }
                 }
-                else {
-                    // TODO: this might actually be a login failure
-                    BackendState::LoggedIn(LoggedInState {})
-                }
-            }
-            _ => {
-                BackendState::UnexpectedError("received non-object response from brightwheel login endpoint".into())
+            },
+            Err(e) => {
+                (
+                    BackendState::LoggedOut(LoggedOutState {}),
+                    format!("Got error logging in: {:?}", e)
+                )
             }
         }
     }
 }
 
-
-// fn log_in_mfa(app: &AppHandle, bw_client: &mut BrightwheelClient, state: BackendState, mfa_code: String) -> BackendState {
-//     match state {
-//         BackendState::NeedsMfa(needs_mfa_state) => {
-//             needs_mfa_state.log_in_mfa(app, bw_client, mfa_code)
-//         },
-//         _ => BackendState::UnexpectedError(format!("Backend in unexpected state for mfa login: {:?}", state)),
-//     }
-// }
-
 impl NeedsMfaState {
-    fn log_in_mfa(self, app: &AppHandle, bw_client: &mut BrightwheelClient, mfa_code: String) -> BackendState {
+    fn log_in_mfa(self, app: &AppHandle, bw_client: &mut BrightwheelClient, mfa_code: String) -> (BackendState, String) {
         complete_login(app, bw_client, self.email, self.password, Some(mfa_code))
     }
 }
 
 
-fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> BackendState {
+fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> (BackendState, String) {
     let response = bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone());
     let response_json = response.json::<serde_json::Value>().unwrap();
     println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
@@ -319,11 +355,17 @@ fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String,
         serde_json::Value::Object(response_obj) => {
             // TODO: could be invalid response??
             write_cookies(app, &bw_client.cookie_store_arc_mutex);
-
-            BackendState::LoggedIn(LoggedInState { })
+            
+            (
+                BackendState::LoggedIn(LoggedInState { }),
+                "Logged in.".into()
+            )
         },
         _ => {
-            BackendState::UnexpectedError("received non-object response from brightwheel login endpoint".into())
+            (
+                BackendState::LoggedOut(LoggedOutState { }),
+                "Received non-object response from brightwheel login endpoint".into()
+            )
         }
     }
 }
@@ -339,6 +381,7 @@ enum SyncMessage {
 type SyncSender = std::sync::mpsc::Sender<SyncMessage>;
 type SyncReceiver = std::sync::mpsc::Receiver<SyncMessage>;
 
+#[derive(Clone)]
 struct SyncItem {
     student: Student,
     timestamp: Zoned,
@@ -358,7 +401,8 @@ fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelC
         sync_receiver,
         backend_sender,
         exif_tool,
-        download_items: VecDeque::new()
+        sync_index: 0,
+        sync_items: Vec::new()
     };
     sync_engine.run();
 }
@@ -369,7 +413,8 @@ struct SyncEngine {
     sync_receiver: SyncReceiver,
     backend_sender: BackendSender,
     exif_tool: ExifTool,
-    download_items: VecDeque<SyncItem>,
+    sync_index: usize,
+    sync_items: Vec<SyncItem>,
 }
 
 impl SyncEngine {
@@ -377,12 +422,7 @@ impl SyncEngine {
 
     fn run(&mut self) {
         loop {
-            if let Some(item) = self.download_items.pop_front() {
-                self.download_item(item);
-                if self.download_items.is_empty() {
-                    self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
-                }
-                
+            if self.sync_next_item() {
                 match self.sync_receiver.try_recv() {
                     Ok(msg) => {
                         match msg {
@@ -390,8 +430,9 @@ impl SyncEngine {
                                 println!("Should not receive sync message while downloading");
                             },
                             SyncMessage::Cancel => {
-                                self.download_items.clear();
-                                self.backend_sender.send(BackendMessage::SyncCanceled);
+                                self.sync_index = 0;
+                                self.sync_items.clear();
+                                self.backend_sender.send(BackendMessage::SyncCanceled).unwrap();
                             },
                         }
                     },
@@ -446,10 +487,15 @@ impl SyncEngine {
         // let mut sync_items = Vec::new();
         let mut page: usize = 0;
         loop {
+            self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
             let count = self.enqueue_sync_items_on_page(student, page);
             if count == 0 {
                 break;
             }
+            self.backend_sender.send(BackendMessage::QueriedItems {
+                page: page,
+                count: count,
+            }).unwrap();
             page += 1;
         }
     }
@@ -471,7 +517,7 @@ impl SyncEngine {
         let mut count: usize = 0;
         for activity in activities {
             if let Some(item) = self.get_sync_item_for_activity(student, activity.as_object().unwrap()) {
-                self.download_items.push_back(item);
+                self.sync_items.push(item);
                 count += 1;
             }
         }
@@ -508,23 +554,41 @@ impl SyncEngine {
         })
     }
 
-    fn download_item(&mut self, item: SyncItem) {
-        println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
+    fn sync_next_item(&mut self) -> bool {
+        // println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
         
-        let student_path = create_student_path(&self.output_root, &item.student);
-        let month_path = create_month_path(&student_path, &item.timestamp);
-        let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
-        let dst_path = month_path.join(filename);
+        if self.sync_index < self.sync_items.len() {
+            let item = &self.sync_items[self.sync_index];
 
-        println!("{:?}", dst_path);
-        if dst_path.exists() {
-            println!("...already exists; skipping");
+            let student_path = create_student_path(&self.output_root, &item.student);
+            let month_path = create_month_path(&student_path, &item.timestamp);
+            let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
+            let dst_path = month_path.join(filename);
+
+            println!("{:?}", dst_path);
+            if dst_path.exists() {
+                println!("...already exists; skipping");
+            }
+            else {
+                println!("...downloading...");
+                self.backend_sender.send(BackendMessage::DownloadStarted {
+                    path: dst_path.clone(),
+                    index: self.sync_index,
+                    count: self.sync_items.len(),
+                }).unwrap();
+                self.bw_client.download_file(&item.url, &dst_path);
+                println!("...done.");
+            }
+            
+            self.sync_index += 1;
+            if self.sync_index == self.sync_items.len() {
+                self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
+            }
+
+            true
         }
         else {
-            println!("...downloading...");
-            self.backend_sender.send(BackendMessage::DownloadStarted(dst_path.clone())).unwrap();
-            self.bw_client.download_file(&item.url, &dst_path);
-            println!("...done.");
+            false
         }
     }
 
@@ -581,6 +645,11 @@ impl LoggedInState {
     fn sync(self, sync_sender: &SyncSender) -> BackendState {
         sync_sender.send(SyncMessage::Sync).unwrap();
         BackendState::Syncing(SyncingState { })
+    }
+
+    fn log_out(self, app: &AppHandle, bw_client: &BrightwheelClient) -> BackendState {
+        remove_cookies(app, &bw_client.cookie_store_arc_mutex);
+        BackendState::LoggedOut(LoggedOutState {})
     }
 }
 
@@ -659,7 +728,12 @@ fn config(app: &AppHandle) -> serde_json::Value {
 
 fn write_config(app: &AppHandle, config: serde_json::Value) {
     let config_path = config_path(app);
-    let file = std::fs::File::options().create(true).truncate(true).open(&config_path).unwrap();
+    println!("config_path: {:?}", config_path);
+    let file = std::fs::File::options()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&config_path).unwrap();
     serde_json::to_writer(file, &config).unwrap();
 }
 
@@ -688,16 +762,17 @@ fn default_output_dir(app: &AppHandle) -> PathBuf {
     app.path().picture_dir().unwrap().join("shinydisc")
 }
 
+fn remove_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
+    cookie_store_arc_mutex.lock().unwrap().clear();
+    write_cookies(app, cookie_store_arc_mutex);
+}
+
 #[allow(deprecated)]
 fn write_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
     let mut writer = std::fs::File::create(cookies_path(app))
       .map(std::io::BufWriter::new)
       .unwrap();
     cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer);
-}
-
-fn to_json_debug<S: Serialize>(x: &S) -> String {
-    serde_json::to_string_pretty(x).unwrap()
 }
 
 #[allow(deprecated)]
