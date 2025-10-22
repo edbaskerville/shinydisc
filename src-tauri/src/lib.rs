@@ -659,6 +659,16 @@ impl SyncEngine {
             }).unwrap();
             if needs_download {
                 self.bw_client.download_file(&item.url, &dst_path)?;
+                
+                // Add GPS coordinates and date/time to metadata
+                let output = self.exif_tool.execute_lines(&[
+                    "-overwrite_original", "-alldates<filename",
+                    "-gpsposition=37.78401801046647, -122.50330791369049",
+                    dst_path.to_str().unwrap()
+                ]).unwrap();
+                for line in output {
+                    println!("{}", line);
+                }
             }
             
             self.sync_index += 1;
