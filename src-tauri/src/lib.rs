@@ -1,7 +1,7 @@
 
 pub mod brightwheel;
 
-use std::{fs, path::PathBuf, str::FromStr, sync::Arc};
+use std::{fs::{self, FileTimes}, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, SystemTime}};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -674,6 +674,11 @@ impl SyncEngine {
                 for line in output {
                     println!("{}", line);
                 }
+
+                // Modify system creation/modification time
+                let _ = fs::File::open(&dst_path).unwrap().set_modified(
+                    SystemTime::UNIX_EPOCH + Duration::from_nanos(item.timestamp.timestamp().as_nanosecond().try_into().unwrap())
+                );
             }
             
             self.sync_index += 1;
