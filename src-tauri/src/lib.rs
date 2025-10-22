@@ -1,7 +1,7 @@
 
 pub mod brightwheel;
 
-use std::{path::{PathBuf}, str::FromStr, sync::Arc};
+use std::{fs, path::PathBuf, str::FromStr, sync::Arc};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -457,6 +457,7 @@ fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelC
 
     let mut sync_engine = SyncEngine {
         output_root,
+        app,
         bw_client,
         sync_receiver,
         backend_sender,
@@ -469,6 +470,7 @@ fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelC
 
 struct SyncEngine {
     output_root: PathBuf,
+    app: AppHandle,
     bw_client: BrightwheelClient,
     sync_receiver: SyncReceiver,
     backend_sender: BackendSender,
@@ -647,7 +649,7 @@ impl SyncEngine {
             let student_path = create_student_path(&self.output_root, &item.student);
             let month_path = create_month_path(&student_path, &item.timestamp);
             let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
-            let dst_path = month_path.join(filename);
+            let dst_path = month_path.join(filename.clone());
 
             println!("{:?}", dst_path);
             let needs_download = !dst_path.exists();
@@ -658,10 +660,13 @@ impl SyncEngine {
                 count: self.sync_items.len(),
             }).unwrap();
             if needs_download {
-                self.bw_client.download_file(&item.url, &dst_path)?;
+                let dst_path_tmp = temp_dir(&self.app).join(filename);
+                self.bw_client.download_file(&item.url, &dst_path_tmp)?;
+                fs::rename(dst_path_tmp, dst_path.clone()).unwrap();
                 
                 // Add GPS coordinates and date/time to metadata
-                let output = self.exif_tool.execute_lines(&[
+                // TODO: provide UI to change/remove GPS coords
+                let output: Vec<String> = self.exif_tool.execute_lines(&[
                     "-overwrite_original", "-alldates<filename",
                     "-gpsposition=37.78401801046647, -122.50330791369049",
                     dst_path.to_str().unwrap()
@@ -814,6 +819,10 @@ fn create_month_path(root_dir: &PathBuf, ts: &Zoned) -> PathBuf {
         std::fs::create_dir_all(&month_path).unwrap();
     }
     month_path
+}
+
+fn temp_dir(app: &AppHandle) -> PathBuf {
+    app.path().temp_dir().unwrap()
 }
 
 
