@@ -1,0 +1,9 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources" : {
+      "../exiftool-windows/exiftool(-k).exe" : "exiftool/exiftool",
+      "../exiftool-windows/exiftool_files" : "exiftool/exiftool_files"
+    }
+  }
+}
