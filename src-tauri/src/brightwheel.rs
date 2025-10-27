@@ -24,7 +24,7 @@ pub struct Student {
 
 impl BrightwheelClient {
     fn make_client(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Client{
-        Client::builder().cookie_provider(cookie_store_arc_mutex).timeout(Duration::from_secs(5)).build().unwrap()
+        Client::builder().cookie_provider(cookie_store_arc_mutex).timeout(Duration::from_secs(30)).build().unwrap()
     }
 
     pub fn new(cookie_store: reqwest_cookie_store::CookieStore) -> Self {
