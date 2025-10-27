@@ -20,6 +20,8 @@ type BackendSender = std::sync::mpsc::Sender<BackendMessage>;
 struct FrontendState {
     message: Option<String>,
     output_dir: String,
+    update_all_metadata: bool,
+    gps_coords: String,
     backend_state: BackendState,
 }
 
@@ -70,6 +72,8 @@ enum BackendMessage {
     },
     LogOut,
     SetOutputDir(String),
+    SetUpdateAllMetadata(bool),
+    SetGPSCoords(String),
     Sync,
     QueryingItems {
         page: usize,
@@ -136,7 +140,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
     let (sync_sender, sync_receiver) = std::sync::mpsc::channel();
     {
         let app_2 = app.clone();
-        let output_root = output_dir(&app_2);
+        let output_root = get_output_dir(&app_2);
         let bw_client = bw_client.clone();
         std::thread::spawn(move || {
             run_sync_engine(app_2, output_root, bw_client, sync_receiver, sender);
@@ -193,6 +197,14 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             BackendMessage::SetOutputDir(output_dir) => {
                 set_output_dir(&app, PathBuf::from_str(&output_dir).unwrap());
                 Some("Output directory set.".to_string())
+            },
+            BackendMessage::SetUpdateAllMetadata(update_all_metdata) => {
+                set_update_all_metadata(&app, update_all_metdata);
+                None
+            },
+            BackendMessage::SetGPSCoords(gps_coords) => {
+                set_gps_coords(&app, gps_coords);
+                Some("GPS coordinates set.".to_string())
             },
             BackendMessage::Sync => {
                 state = sync(state, &sync_sender);
@@ -279,9 +291,12 @@ fn log_to_frontend(app: &AppHandle, log_msg: String) {
 /*** FRONTEND STATE UPDATE ***/
 
 fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message: Option<String>) {
+    let config = get_config(app);
     let frontend_state = FrontendState {
         message: frontend_message,
-        output_dir: output_dir(app).to_str().unwrap().into(),
+        update_all_metadata: config.should_update_all_metadata(),
+        gps_coords: config.get_gps_coords(),
+        output_dir: config.get_output_dir(app).to_str().unwrap().into(),
         backend_state: backend_state.clone(),
     };
     println!("frontend_state: {:?}", frontend_state);
@@ -663,22 +678,23 @@ impl SyncEngine {
                 let dst_path_tmp = temp_dir(&self.app).join(filename);
                 self.bw_client.download_file(&item.url, &dst_path_tmp)?;
                 fs::rename(dst_path_tmp, dst_path.clone()).unwrap();
-                
-                // Add GPS coordinates and date/time to metadata
-                // TODO: provide UI to change/remove GPS coords
-                let output: Vec<String> = self.exif_tool.execute_lines(&[
-                    "-overwrite_original", "-alldates<filename",
-                    "-gpsposition=37.78401801046647, -122.50330791369049",
-                    dst_path.to_str().unwrap()
-                ]).unwrap();
-                for line in output {
-                    println!("{}", line);
-                }
 
                 // Modify system creation/modification time
                 let _ = fs::File::open(&dst_path).unwrap().set_modified(
                     SystemTime::UNIX_EPOCH + Duration::from_nanos(item.timestamp.timestamp().as_nanosecond().try_into().unwrap())
                 );
+            }
+
+            if needs_download || should_update_all_metadata(&self.app) {
+                // Add GPS coordinates and date/time to metadata
+                let output: Vec<String> = self.exif_tool.execute_lines(&[
+                    "-overwrite_original", "-alldates<filename",
+                    &format!("-gpsposition={}", get_gps_coords(&self.app)),
+                    dst_path.to_str().unwrap()
+                ]).unwrap();
+                for line in output {
+                    println!("{}", line);
+                }
             }
             
             self.sync_index += 1;
@@ -841,18 +857,22 @@ fn config_path(app: &AppHandle) -> PathBuf {
     config_dir(app).join("config.json")
 }
 
-fn config(app: &AppHandle) -> serde_json::Value {
+fn get_config(app: &AppHandle) -> Config {
     let config_path = config_path(app);
     if config_path.exists() {
         let file = std::fs::File::open(&config_path).unwrap();
         serde_json::from_reader(file).unwrap()
     }
     else {
-        json!({})
+        Config {
+            output_dir: None,
+            update_all_metadata: None,
+            gps_coords: None,
+        }
     }
 }
 
-fn write_config(app: &AppHandle, config: serde_json::Value) {
+fn write_config(app: &AppHandle, config: Config) {
     let config_path = config_path(app);
     println!("config_path: {:?}", config_path);
     let file = std::fs::File::options()
@@ -864,7 +884,20 @@ fn write_config(app: &AppHandle, config: serde_json::Value) {
 }
 
 fn set_output_dir(app: &AppHandle, output_dir: PathBuf) {
-    let config = json!({"output_dir" : output_dir.to_str().unwrap() });
+    let mut config = get_config(app);
+    config.output_dir = Some(output_dir);
+    write_config(app, config);
+}
+
+fn set_update_all_metadata(app: &AppHandle, update_all_metdata: bool) {
+    let mut config = get_config(app);
+    config.update_all_metadata = Some(update_all_metdata);
+    write_config(app, config);
+}
+
+fn set_gps_coords(app: &AppHandle, gps_coords: String) {
+    let mut config = get_config(app);
+    config.gps_coords = Some(gps_coords);
     write_config(app, config);
 }
 
@@ -872,20 +905,39 @@ fn cookies_path(app: &AppHandle) -> PathBuf {
     app.path().app_config_dir().unwrap().join("cookies.json")
 }
 
-fn output_dir(app: &AppHandle) -> PathBuf {
-    let config = config(app);
-    let config_map = config.as_object().unwrap();
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Config {
+    output_dir: Option<PathBuf>,
+    update_all_metadata: Option<bool>,
+    gps_coords: Option<String>,
+}
 
-    if config_map.contains_key("output_dir") {
-        config_map.get("output_dir").unwrap().as_str().unwrap().into()
+impl Config {
+    fn get_output_dir(&self, app: &AppHandle) -> PathBuf {
+        self.output_dir.clone().unwrap_or(
+            app.path().picture_dir().unwrap().join("shinydisc")
+        )
     }
-    else {
-        default_output_dir(app)
+
+    fn should_update_all_metadata(&self) -> bool {
+        self.update_all_metadata.unwrap_or(false)
+    }
+
+    fn get_gps_coords(&self) -> String {
+        self.gps_coords.clone().unwrap_or("37.78401, -122.50331".into())
     }
 }
 
-fn default_output_dir(app: &AppHandle) -> PathBuf {
-    app.path().picture_dir().unwrap().join("shinydisc")
+fn should_update_all_metadata(app: &AppHandle) -> bool {
+    get_config(app).should_update_all_metadata()
+}
+
+fn get_gps_coords(app: &AppHandle) -> String {
+    get_config(app).get_gps_coords()
+}
+
+fn get_output_dir(app: &AppHandle) -> PathBuf {
+    get_config(app).get_output_dir(app)
 }
 
 fn remove_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {

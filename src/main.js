@@ -6,11 +6,11 @@ const tauri = window.__TAURI__;
 
 let emailInput;
 let pwInput;
-let loginMsgEl;
 let messageEl;
 let outputDirEl;
+let metadataCheckboxEl;
+let gpsCoordsEl;
 let mfaInput;
-let mfaMsgEl;
 let cancelSyncBtn;
 let logOutBtn;
 let state;
@@ -68,6 +68,7 @@ listen('update-state', (event) => {
   // setTab(result.tab_name);
 });
 
+// The lengths to which I am avoiding a React-like dependency for this test app
 function updateViewFromState() {
   let backendState = state.backend_state;
 
@@ -91,7 +92,12 @@ function updateViewFromState() {
   }
 
   messageEl.innerText = state.message;
+  metadataCheckboxEl.checked = state.update_all_metadata;
   outputDirEl.innerText = state.output_dir;
+
+  if(gpsCoordsEl.value != state.gps_coords) {
+    gpsCoordsEl.value = state.gps_coords;
+  }
 }
 
 /*
@@ -148,6 +154,18 @@ function logOut() {
   });
 }
 
+function setUpdateAllMetadata() {
+  sendBackendMessage({
+    "SetUpdateAllMetadata" : Boolean(metadataCheckboxEl.checked)
+  });
+}
+
+function setGPSCoords() {
+  sendBackendMessage({
+    "SetGPSCoords" : gpsCoordsEl.value
+  });
+}
+
 function chooseOutputPathSync() {
   chooseOutputPath().then(() => {
     console.log("promise succeeded");
@@ -182,16 +200,24 @@ window.addEventListener("DOMContentLoaded", () => {
   emailInput = document.querySelector("#email-input");
   pwInput = document.querySelector("#password-input");
   mfaInput = document.querySelector("#mfa-input");
-  loginMsgEl = document.querySelector("#login-error-p");
   messageEl = document.querySelector("#message-p");
-  outputDirEl = document.querySelector("#output-dir-p")
-  mfaMsgEl = document.querySelector("#mfa-error-p");
+  outputDirEl = document.querySelector("#output-dir-p");
+  metadataCheckboxEl = document.querySelector("#metadata-checkbox");
+  gpsCoordsEl = document.querySelector("#gps-input");
   cancelSyncBtn = document.getElementById("cancel-sync-btn");
   logOutBtn = document.getElementById("log-out-btn");
   console.log(cancelSyncBtn);
 
   logOutBtn.addEventListener("click", (e) => {
     logOut();
+  });
+
+  metadataCheckboxEl.addEventListener("input", (e) => {
+    setUpdateAllMetadata();
+  });
+
+  gpsCoordsEl.addEventListener("input", (e) => {
+    setGPSCoords();
   });
 
   document.querySelector("#login-form").addEventListener("submit", (e) => {
