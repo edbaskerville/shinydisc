@@ -1,12 +1,12 @@
 
 pub mod brightwheel;
 
-use std::{fs::{self, FileTimes}, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, SystemTime}};
+use std::{fs, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, SystemTime}};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 use tauri::{AppHandle, Builder, Emitter, Manager};
 
 use exiftool::ExifTool;
@@ -312,6 +312,8 @@ impl LoggedOutState {
         match bw_client.post_sessions_start(email.clone(), password.clone()) {
             Ok(response) => {
                 println!("OK response");
+                // println!("login response txt: {}", response.text().unwrap());
+                // panic!();
                 match response.json::<serde_json::Value>() {
                     Ok(response_json) => {
                         println!("ok json");
@@ -942,11 +944,11 @@ fn get_output_dir(app: &AppHandle) -> PathBuf {
 
 fn remove_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
     cookie_store_arc_mutex.lock().unwrap().clear();
-    delete_cookies(app, cookie_store_arc_mutex);
+    delete_cookies(app);
 }
 
 #[allow(deprecated)]
-fn delete_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
+fn delete_cookies(app: &AppHandle) {
     let path = cookies_path(app);
     if path.exists() {
         std::fs::remove_file(path).unwrap();
@@ -958,7 +960,7 @@ fn write_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>
     let mut writer = std::fs::File::create(cookies_path(app))
       .map(std::io::BufWriter::new)
       .unwrap();
-    cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer);
+    cookie_store_arc_mutex.lock().unwrap().save_json(&mut writer).unwrap();
 }
 
 #[allow(deprecated)]
