@@ -4,19 +4,15 @@ const { listen } = window.__TAURI__.event;
 
 const tauri = window.__TAURI__;
 
-let emailInput;
-let pwInput;
 let messageEl;
 let outputDirEl;
 let metadataCheckboxEl;
 let gpsCoordsEl;
-let mfaInput;
 let cancelSyncBtn;
-let logOutBtn;
 let state;
 
 export function setTab(targetTabName) {
-  for(let tabName of ["login", "mfa", "loggedin", "syncing"]) {
+  for(let tabName of ["login", "loggedin", "syncing"]) {
     let tabEl = document.querySelector("#" + tabName + "-tab");
     if(tabName == targetTabName) {
       tabEl.classList.add("tab-visible");
@@ -75,9 +71,6 @@ function updateViewFromState() {
   if(backendState["LoggedOut"]) {
     setTab("login");
   }
-  else if(backendState["NeedsMfa"]) {
-    setTab("mfa");
-  }
   else if(backendState["LoggedIn"]) {
     setTab("loggedin");
   }
@@ -98,60 +91,6 @@ function updateViewFromState() {
   if(gpsCoordsEl.value != state.gps_coords) {
     gpsCoordsEl.value = state.gps_coords;
   }
-}
-
-/*
-  Send login information to backend
-*/
-function logIn() {
-  sendBackendMessage({
-    "LogIn" : {
-      email: emailInput.value,
-      password: pwInput.value
-    }
-  });
-  pwInput.value = "";
-}
-
-/*
-  Listen to login response from backend
-*/
-listen('login-response', (event) => {
-  console.log(
-    `got login-response: ${event.payload}`
-  );
-
-  // Code from command
-  // let result = await invoke("init_view");
-  // setTab(result.tab_name);
-});
-
-
-function logInMfa() {
-  sendBackendMessage({
-    "LogInMfa" : {
-      "mfa_code": mfaInput.value
-    }
-  });
-}
-
-listen('login-mfa-response', (event) => {
-  console.log(
-    `got login-mfa-response: ${event.payload}`
-  );
-  // if(result.message) {
-  //   mfaMsgEl.textContent = result.message;
-  // }
-  // setTab(result.tab_name);
-});
-
-/*
-  Ask backend to log out
-*/
-function logOut() {
-  sendBackendMessage({
-    "LogOut" : null
-  });
 }
 
 function setUpdateAllMetadata() {
@@ -196,10 +135,7 @@ listen('sync-update', (event) => {
 
 window.addEventListener("DOMContentLoaded", () => {
   sendBackendMessage({DOMContentLoaded: null});
-
-  emailInput = document.querySelector("#email-input");
-  pwInput = document.querySelector("#password-input");
-  mfaInput = document.querySelector("#mfa-input");
+  
   messageEl = document.querySelector("#message-p");
   outputDirEl = document.querySelector("#output-dir-p");
   metadataCheckboxEl = document.querySelector("#metadata-checkbox");
@@ -208,26 +144,12 @@ window.addEventListener("DOMContentLoaded", () => {
   logOutBtn = document.getElementById("log-out-btn");
   console.log(cancelSyncBtn);
 
-  logOutBtn.addEventListener("click", (e) => {
-    logOut();
-  });
-
   metadataCheckboxEl.addEventListener("input", (e) => {
     setUpdateAllMetadata();
   });
 
   gpsCoordsEl.addEventListener("input", (e) => {
     setGPSCoords();
-  });
-
-  document.querySelector("#login-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    logIn();
-  });
-
-  document.querySelector("#mfa-form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    logInMfa();
   });
 
   document.querySelector("#choose-folder-button").addEventListener("click", (e) => {

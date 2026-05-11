@@ -56,25 +56,25 @@ impl BrightwheelClient {
         }
     }
 
-    pub fn post_sessions_start(&self, email: String, password: String) -> reqwest::Result<Response> {
-        let request = self.client.post(
-            format!("{}/sessions/start", URL_BASE)
-        )
-            .headers(self.auth_headers.clone())
-            .json(&Self::authentication_json(email, password, None))
-            .build().unwrap();
-        self.client.execute(request)
-    }
+    // pub fn post_sessions_start(&self, email: String, password: String) -> reqwest::Result<Response> {
+    //     let request = self.client.post(
+    //         format!("{}/sessions/start", URL_BASE)
+    //     )
+    //         .headers(self.auth_headers.clone())
+    //         .json(&Self::authentication_json(email, password, None))
+    //         .build().unwrap();
+    //     self.client.execute(request)
+    // }
 
-    pub fn post_sessions(&self, email: String, password: String, mfa_code_opt: Option<String>) -> reqwest::Result<Response> {
-        let request = self.client.post(
-            format!("{}/sessions", URL_BASE)
-        )
-            .headers(self.auth_headers.clone())
-            .json(&Self::authentication_json(email, password, mfa_code_opt))
-            .build().unwrap();
-        self.client.execute(request)
-    }
+    // pub fn post_sessions(&self, email: String, password: String, mfa_code_opt: Option<String>) -> reqwest::Result<Response> {
+    //     let request = self.client.post(
+    //         format!("{}/sessions", URL_BASE)
+    //     )
+    //         .headers(self.auth_headers.clone())
+    //         .json(&Self::authentication_json(email, password, mfa_code_opt))
+    //         .build().unwrap();
+    //     self.client.execute(request)
+    // }
 
     pub fn get_users_me(&self) -> reqwest::Result<Response> {
         let request = self.client.get(format!("{}/users/me", URL_BASE)).build().unwrap();
@@ -152,19 +152,19 @@ impl BrightwheelClient {
         self.client.execute(request)
     }
 
-    fn authentication_json(email: String, password: String, mfa_code_opt: Option<String>) -> Value {
-        let mut json_val = json!({
-            "user" : {
-                "email" : email,
-                "password" : password
-            }
-        });
-        
-        if let Some(mfa_code) = mfa_code_opt {
-            json_val.as_object_mut().unwrap().insert("2fa_code".into(), mfa_code.into());
-        }
-        json_val
-    }
+//     fn authentication_json(email: String, password: String, mfa_code_opt: Option<String>) -> Value {
+//         let mut json_val = json!({
+//             "user" : {
+//                 "email" : email,
+//                 "password" : password
+//             }
+//         });
+//         
+//         if let Some(mfa_code) = mfa_code_opt {
+//             json_val.as_object_mut().unwrap().insert("2fa_code".into(), mfa_code.into());
+//         }
+//         json_val
+//     }
 
     pub fn download_file(&self, src_url: &reqwest::Url, dst_path: &PathBuf) -> reqwest::Result<()> {
         let request = self.client.get(

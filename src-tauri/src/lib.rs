@@ -7,7 +7,7 @@ use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Builder, Emitter, Manager};
+use tauri::{AppHandle, Builder, Emitter, Manager, Url};
 
 use exiftool::ExifTool;
 
@@ -28,7 +28,7 @@ struct FrontendState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BackendState {
     LoggedOut(LoggedOutState),
-    NeedsMfa(NeedsMfaState),
+    // NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
     Syncing(SyncingState),
     SyncCanceling(SyncCancelingState),
@@ -38,11 +38,11 @@ enum BackendState {
 struct LoggedOutState {
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct NeedsMfaState {
-    email: String,
-    password: String,
-}
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// struct NeedsMfaState {
+//     email: String,
+//     password: String,
+// }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct LoggedInState {
@@ -63,14 +63,14 @@ struct SyncCancelingState {
 enum BackendMessage {
     Test,
     DOMContentLoaded,
-    LogIn {
-        email: String,
-        password: String,
-    },
-    LogInMfa {
-        mfa_code: String,
-    },
-    LogOut,
+    // LogIn {
+    //     email: String,
+    //     password: String,
+    // },
+    // LogInMfa {
+    //     mfa_code: String,
+    // },
+    // LogOut,
     SetOutputDir(String),
     SetUpdateAllMetadata(bool),
     SetGPSCoords(String),
@@ -126,6 +126,10 @@ pub fn run() {
 }
 
 fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
+    // let windows = app.webview_windows();
+    // let window = Vec::from_iter(windows.values())[0];
+    // window.navigate(Url::parse("https://schools.mybrightwheel.com").unwrap()).unwrap();
+
     let (already_logged_in, cookie_store) = init_cookie_store(&app);
     let mut bw_client = BrightwheelClient::new(cookie_store);
     let mut state = if already_logged_in {
@@ -157,43 +161,43 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
                 None
             },
-            BackendMessage::LogIn { email, password } => {
-                match state {
-                    BackendState::LoggedOut(logged_out_state) => {
-                        let msg;
-                        (state, msg) = logged_out_state.log_in(&app, &mut bw_client, email, password);
-                        Some(msg)
-                    },
-                    _ => {
-                        Some(format!("LogIn received from wrong state: {:?}", state))
-                    }
-                }
-            },
-            BackendMessage::LogInMfa { mfa_code } => {
-                match state {
-                    BackendState::NeedsMfa(needs_mfa_state) => {
-                        let msg;
-                        (state, msg) = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
-                        Some(msg)
-                    },
-                    _ => {
-                        log_to_frontend(&app, format!("LogInMfa received from wrong state: {:?}", state));
-                        None
-                    }
-                }
-            },
-            BackendMessage::LogOut => {
-                match state {
-                    BackendState::LoggedIn(logged_in_state) => {
-                        state = logged_in_state.log_out(&app, &mut bw_client);
-                        Some("Logged out.".into())
-                    },
-                    _ => {
-                        log_to_frontend(&app, format!("LogOut received from wrong state: {:?}", state));
-                        None
-                    }
-                }
-            },
+            // BackendMessage::LogIn { email, password } => {
+            //     match state {
+            //         BackendState::LoggedOut(logged_out_state) => {
+            //             let msg;
+            //             (state, msg) = logged_out_state.log_in(&app, &mut bw_client, email, password);
+            //             Some(msg)
+            //         },
+            //         _ => {
+            //             Some(format!("LogIn received from wrong state: {:?}", state))
+            //         }
+            //     }
+            // },
+            // BackendMessage::LogInMfa { mfa_code } => {
+            //     match state {
+            //         BackendState::NeedsMfa(needs_mfa_state) => {
+            //             let msg;
+            //             (state, msg) = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
+            //             Some(msg)
+            //         },
+            //         _ => {
+            //             log_to_frontend(&app, format!("LogInMfa received from wrong state: {:?}", state));
+            //             None
+            //         }
+            //     }
+            // },
+            // BackendMessage::LogOut => {
+            //     match state {
+            //         BackendState::LoggedIn(logged_in_state) => {
+            //             state = logged_in_state.log_out(&app, &mut bw_client);
+            //             Some("Logged out.".into())
+            //         },
+            //         _ => {
+            //             log_to_frontend(&app, format!("LogOut received from wrong state: {:?}", state));
+            //             None
+            //         }
+            //     }
+            // },
             BackendMessage::SetOutputDir(output_dir) => {
                 set_output_dir(&app, PathBuf::from_str(&output_dir).unwrap());
                 Some("Output directory set.".to_string())
@@ -304,148 +308,6 @@ fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message:
     app.emit("update-state", frontend_state).unwrap();
 }
 
-
-/*** LOGIN ***/
-
-impl LoggedOutState {
-    fn log_in(self, app: &AppHandle, bw_client: &mut BrightwheelClient, email: String, password: String) -> (BackendState, String) {
-        match bw_client.post_sessions_start(email.clone(), password.clone()) {
-            Ok(response) => {
-                println!("OK response");
-                // println!("login response txt: {}", response.text().unwrap());
-                // panic!();
-                match response.json::<serde_json::Value>() {
-                    Ok(response_json) => {
-                        println!("ok json");
-                        println!("login response: {}", response_json);
-                        match response_json {
-                            serde_json::Value::Object(response_obj) => {
-                                if let Some(mfa_required_val) = response_obj.get("2fa_required") {
-                                    if let Some(mfa_required) = mfa_required_val.as_bool() {
-                                        if mfa_required {
-                                            (
-                                                BackendState::NeedsMfa(NeedsMfaState {
-                                                    email, password,
-                                                }),
-                                                "Check your email for authentication code".into()
-                                            )
-                                        }
-                                        else {
-                                            complete_login(app, bw_client, email, password, None)
-                                        }
-                                    }
-                                    else {
-                                        (
-                                            BackendState::LoggedOut(LoggedOutState {  }),
-                                            "2fa_required is not a bool???".into()
-                                        )
-                                    }
-                                }
-                                else {
-                                    if response_obj.contains_key("error") {
-                                        (
-                                            BackendState::LoggedOut(LoggedOutState {  }),
-                                            format!("Error: {}", response_obj.get("error").unwrap().as_str().unwrap())
-                                        )
-                                    }
-                                    else {
-                                        (
-                                            BackendState::LoggedIn(LoggedInState {}),
-                                            "Logged in".into()
-                                        )
-                                    }
-                                }
-                            }
-                            _ => {
-                                (
-                                    BackendState::LoggedOut(LoggedOutState {}),
-                                    "received non-object response from brightwheel login endpoint".into()
-                                )
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        println!("err json");
-                        println!("{:?}", e);
-                        (
-                            BackendState::LoggedOut(LoggedOutState {}),
-                            format!("received error parsing JSON: {:?}", e)
-                        )
-                    }
-                }
-            },
-            Err(e) => {
-                println!("err response");
-                (
-                    BackendState::LoggedOut(LoggedOutState {}),
-                    format!("Got error logging in: {:?}", e)
-                )
-            }
-        }
-    }
-}
-
-impl NeedsMfaState {
-    fn log_in_mfa(self, app: &AppHandle, bw_client: &mut BrightwheelClient, mfa_code: String) -> (BackendState, String) {
-        complete_login(app, bw_client, self.email, self.password, Some(mfa_code))
-    }
-}
-
-
-fn complete_login(app: &AppHandle, bw_client: &BrightwheelClient, email: String, password: String, mfa_code_opt: Option<String>) -> (BackendState, String) {
-    match bw_client.post_sessions(email.clone(), password.clone(), mfa_code_opt.clone()) {
-        Ok(response) => {
-            match response.json::<serde_json::Value>() {
-                Ok(response_json) => {
-                    println!("response_json: {}", response_json);
-                    println!("/sessions response_json: {}\n", serde_json::to_string(&response_json).unwrap());
-                    match response_json {
-                        serde_json::Value::Object(response_obj) => {
-                            if response_obj.contains_key("_errors") {
-                                (
-                                    BackendState::NeedsMfa(NeedsMfaState { email, password }),
-                                    format!(
-                                        "Error: {}",
-                                        response_obj
-                                            .get("_errors").unwrap().as_array().unwrap().get(0).unwrap()
-                                            .get("message").unwrap().as_str().unwrap()
-                                    )
-                                )
-                            }
-                            else {
-                                write_cookies(app, &bw_client.cookie_store_arc_mutex);
-                                
-                                (
-                                    BackendState::LoggedIn(LoggedInState { }),
-                                    "Logged in.".into()
-                                )
-
-                            }
-                        },
-                        _ => {
-                            (
-                                BackendState::LoggedOut(LoggedOutState { }),
-                                "Received non-object response from brightwheel login endpoint".into()
-                            )
-                        }
-                    }
-                },
-                Err(e) => {
-                    (
-                        BackendState::LoggedOut(LoggedOutState { }),
-                        format!("Login received error decoding JSON: {:?}", e),
-                    )
-                }
-            }
-        },
-        Err(e) => {
-            (
-                BackendState::LoggedOut(LoggedOutState { }),
-                format!("Login received error from HTTP request: {:?}", e),
-            )
-        }
-    }
-}
 
 /*** SYNC ***/
 
@@ -781,11 +643,6 @@ impl LoggedInState {
     fn sync(self, sync_sender: &SyncSender) -> BackendState {
         sync_sender.send(SyncMessage::Sync).unwrap();
         BackendState::Syncing(SyncingState { })
-    }
-
-    fn log_out(self, app: &AppHandle, bw_client: &BrightwheelClient) -> BackendState {
-        remove_cookies(app, &bw_client.cookie_store_arc_mutex);
-        BackendState::LoggedOut(LoggedOutState {})
     }
 }
 
