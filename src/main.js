@@ -58,10 +58,6 @@ listen('update-state', (event) => {
   );
   state = event.payload;
   updateViewFromState();
-
-  // Code from command
-  // let result = await invoke("init_view");
-  // setTab(result.tab_name);
 });
 
 // The lengths to which I am avoiding a React-like dependency for this test app

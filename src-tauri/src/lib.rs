@@ -7,7 +7,7 @@ use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Builder, Emitter, Manager, Url};
+use tauri::{AppHandle, Builder, Emitter, Manager, Url, webview::{WebviewWindowBuilder}, utils::config::WebviewUrl};
 
 use exiftool::ExifTool;
 
@@ -62,15 +62,8 @@ struct SyncCancelingState {
 #[derive(Serialize, Deserialize, Clone)]
 enum BackendMessage {
     Test,
+    OnBrightwheelNavigation(Url),
     DOMContentLoaded,
-    // LogIn {
-    //     email: String,
-    //     password: String,
-    // },
-    // LogInMfa {
-    //     mfa_code: String,
-    // },
-    // LogOut,
     SetOutputDir(String),
     SetUpdateAllMetadata(bool),
     SetGPSCoords(String),
@@ -99,12 +92,27 @@ enum BackendMessage {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let (backend_sender, backend_receiver) = std::sync::mpsc::channel();
-    let backend_sender_2 = backend_sender.clone();
+    let backend_sender_app_manage = backend_sender.clone();
+    let backend_sender_on_navigation = backend_sender.clone();
 
     let app = Builder::default()
         .setup(|app| {
-            app.manage(backend_sender);
-            Ok(())            
+            app.manage(backend_sender_app_manage);
+            
+            let wvw_brightwheel = WebviewWindowBuilder::new(
+                app, "brightwheel",
+                WebviewUrl::External(
+                    Url::parse("https://schools.mybrightwheel.com").unwrap()
+                )
+            ).on_navigation(move |url| {
+                backend_sender_on_navigation.send(
+                    BackendMessage::OnBrightwheelNavigation(url.clone())
+                ).unwrap();
+                
+                true
+            }).build();
+            
+            Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -120,16 +128,12 @@ pub fn run() {
     }
 
     std::thread::spawn(move || {
-        run_backend(backend_sender_2, backend_receiver, app_handle);
+        run_backend(backend_sender, backend_receiver, app_handle);
     });
     app.run(|_app, _event| { });
 }
 
 fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
-    // let windows = app.webview_windows();
-    // let window = Vec::from_iter(windows.values())[0];
-    // window.navigate(Url::parse("https://schools.mybrightwheel.com").unwrap()).unwrap();
-
     let (already_logged_in, cookie_store) = init_cookie_store(&app);
     let mut bw_client = BrightwheelClient::new(cookie_store);
     let mut state = if already_logged_in {
@@ -157,47 +161,14 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 respond_to_test_message(&app);
                 Some("Test message".to_string())
             },
+            BackendMessage::OnBrightwheelNavigation(url) => {
+                state = update_login_state_from_cookies(&app, state, url);
+                None
+            },
             BackendMessage::DOMContentLoaded => {    
                 log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
                 None
             },
-            // BackendMessage::LogIn { email, password } => {
-            //     match state {
-            //         BackendState::LoggedOut(logged_out_state) => {
-            //             let msg;
-            //             (state, msg) = logged_out_state.log_in(&app, &mut bw_client, email, password);
-            //             Some(msg)
-            //         },
-            //         _ => {
-            //             Some(format!("LogIn received from wrong state: {:?}", state))
-            //         }
-            //     }
-            // },
-            // BackendMessage::LogInMfa { mfa_code } => {
-            //     match state {
-            //         BackendState::NeedsMfa(needs_mfa_state) => {
-            //             let msg;
-            //             (state, msg) = needs_mfa_state.log_in_mfa(&app, &mut bw_client, mfa_code);
-            //             Some(msg)
-            //         },
-            //         _ => {
-            //             log_to_frontend(&app, format!("LogInMfa received from wrong state: {:?}", state));
-            //             None
-            //         }
-            //     }
-            // },
-            // BackendMessage::LogOut => {
-            //     match state {
-            //         BackendState::LoggedIn(logged_in_state) => {
-            //             state = logged_in_state.log_out(&app, &mut bw_client);
-            //             Some("Logged out.".into())
-            //         },
-            //         _ => {
-            //             log_to_frontend(&app, format!("LogOut received from wrong state: {:?}", state));
-            //             None
-            //         }
-            //     }
-            // },
             BackendMessage::SetOutputDir(output_dir) => {
                 set_output_dir(&app, PathBuf::from_str(&output_dir).unwrap());
                 Some("Output directory set.".to_string())
@@ -636,6 +607,21 @@ fn sync_error(state: BackendState) -> BackendState {
             println!("Unexpected state for sync error: {:?}", state);
             state
         }
+    }
+}
+
+fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, url: Url) -> BackendState {
+    println!("navigation url: {}", url);
+    let cookies = app.get_webview_window("brightwheel").unwrap().cookies().unwrap();
+    for cookie in cookies {
+        println!("got cookie: {:?}", cookie);
+    }
+    state
+}
+
+impl LoggedOutState {
+    fn log_in(self) -> BackendState {
+        BackendState::LoggedIn(LoggedInState {  })
     }
 }
 
