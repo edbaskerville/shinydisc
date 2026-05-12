@@ -1,18 +1,20 @@
-use std::{path::PathBuf, sync::{Arc}, time::Duration};
+use std::{path::PathBuf, sync::{Arc, Mutex}, time::Duration};
 
 const URL_BASE: &str = "https://schools.mybrightwheel.com/api/v1";
 
 use reqwest::{
-    blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
+    blocking::{Client, Response}, cookie::CookieStore, header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, ORIGIN, REFERER, USER_AGENT}
 };
-use reqwest_cookie_store::CookieStoreMutex;
+use tauri::{Url, webview};
+use reqwest_cookie_store::{CookieStoreMutex, RawCookieParseError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub struct BrightwheelClient {
     client: Client,
-    pub cookie_store_arc_mutex: Arc<CookieStoreMutex>,
-    auth_headers: HeaderMap,
+    // pub cookie_store_arc_mutex: Arc<CookieStoreMutex>,
+    // pub cookies_arc_mutex: Arc<Mutex<Vec<Cookie<'static>>>>,
+    // auth_headers: HeaderMap,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -22,37 +24,47 @@ pub struct Student {
     pub last_name: String,
 }
 
+// fn cookie_store_from_tauri_cookies(cookies: Vec<Cookie>) -> CookieStoreMutex {
+//     let cookie_store_mutex = CookieStoreMutex::new(reqwest_cookie_store::CookieStore::new(None));
+//     cookie_store_mutex
+//     cookie_store_mutex
+// }
+
+// fn make_client(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Client{
+//     Client::builder().cookie_provider(cookie_store_arc_mutex).timeout(Duration::from_secs(30)).build().unwrap()
+// }
+
 impl BrightwheelClient {
-    fn make_client(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Client{
-        Client::builder().cookie_provider(cookie_store_arc_mutex).timeout(Duration::from_secs(30)).build().unwrap()
-    }
+    pub fn new(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Self {
+        // let cookie_store_arc_mutex = Arc::new(
+        //     CookieStoreMutex::new(reqwest_cookie_store::CookieStore::new())
+        // );
+        // let cookies_arc_mutex = Arc::new(Mutex::new(Vec::new()));
 
-    pub fn new(cookie_store: reqwest_cookie_store::CookieStore) -> Self {
-        let cookie_store_arc_mutex = Arc::new(
-            CookieStoreMutex::new(cookie_store)
-        );
-
-        let client = Self::make_client(cookie_store_arc_mutex.clone());
-        let auth_headers = HeaderMap::from_iter(vec![
-            (CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap()),
-            (
-                HeaderName::from_static("x-client-version"), 
-                HeaderValue::from_str("106").unwrap(),
-            ),
-            (
-                HeaderName::from_static("x-client-name"),
-                HeaderValue::from_str("web").unwrap(),
-            ),
-            (ORIGIN, HeaderValue::from_str("https://schools.mybrightwheel.com").unwrap()),
-            (REFERER, HeaderValue::from_str("https://schools.mybrightwheel.com/sign-in").unwrap()),
-            // (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0").unwrap()),
-            (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36").unwrap()),
-        ].into_iter());
+        let client = Client::builder()
+            .cookie_provider(cookie_store_arc_mutex)
+            .timeout(Duration::from_secs(30))
+            .build().unwrap();
+        // let auth_headers = HeaderMap::from_iter(vec![
+        //     (CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap()),
+        //     // (
+        //     //     HeaderName::from_static("x-client-version"), 
+        //     //     HeaderValue::from_str("106").unwrap(),
+        //     // ),
+        //     // (
+        //     //     HeaderName::from_static("x-client-name"),
+        //     //     HeaderValue::from_str("web").unwrap(),
+        //     // ),
+        //     // (ORIGIN, HeaderValue::from_str("https://schools.mybrightwheel.com").unwrap()),
+        //     // (REFERER, HeaderValue::from_str("https://schools.mybrightwheel.com/sign-in").unwrap()),
+        //     // // (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0").unwrap()),
+        //     // (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36").unwrap()),
+        // ].into_iter());
 
         Self {
             client,
-            cookie_store_arc_mutex,
-            auth_headers,
+            // cookie_store_arc_mutex,
+            // auth_headers,
         }
     }
 
@@ -144,12 +156,12 @@ impl BrightwheelClient {
     }
 }
 
-impl Clone for BrightwheelClient {
-    fn clone(&self) -> Self {
-        Self {
-            client: Self::make_client(self.cookie_store_arc_mutex.clone()),
-            cookie_store_arc_mutex: self.cookie_store_arc_mutex.clone(),
-            auth_headers: self.auth_headers.clone()
-        }
-    }
-}
+// impl Clone for BrightwheelClient {
+//     fn clone(&self) -> Self {
+//         Self {
+//             client: make_client(self.cookie_store_arc_mutex.clone()),
+//             cookie_store_arc_mutex: self.cookie_store_arc_mutex.clone(),
+//             // auth_headers: self.auth_headers.clone()
+//         }
+//     }
+// }

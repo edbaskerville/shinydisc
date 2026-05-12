@@ -137,7 +137,7 @@ window.addEventListener("DOMContentLoaded", () => {
   metadataCheckboxEl = document.querySelector("#metadata-checkbox");
   gpsCoordsEl = document.querySelector("#gps-input");
   cancelSyncBtn = document.getElementById("cancel-sync-btn");
-  logOutBtn = document.getElementById("log-out-btn");
+  // logOutBtn = document.getElementById("log-out-btn");
   console.log(cancelSyncBtn);
 
   metadataCheckboxEl.addEventListener("input", (e) => {

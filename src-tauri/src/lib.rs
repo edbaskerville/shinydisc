@@ -7,7 +7,7 @@ use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Builder, Emitter, Manager, Url, webview::{WebviewWindowBuilder}, utils::config::WebviewUrl};
+use tauri::{AppHandle, Builder, Emitter, Manager, Url, webview::{WebviewWindowBuilder, Cookie}, utils::config::WebviewUrl};
 
 use exiftool::ExifTool;
 
@@ -46,12 +46,10 @@ struct LoggedOutState {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct LoggedInState {
-
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SyncingState {
-
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -133,23 +131,48 @@ pub fn run() {
     app.run(|_app, _event| { });
 }
 
-fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
-    let (already_logged_in, cookie_store) = init_cookie_store(&app);
-    let mut bw_client = BrightwheelClient::new(cookie_store);
-    let mut state = if already_logged_in {
-        BackendState::LoggedIn(LoggedInState {  })
+pub fn update_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>, cookies: Vec<tauri::webview::Cookie<'static>>) {
+    // let cookie_header_vals: Vec<_> = cookies.iter().map(|cookie| {
+    //     HeaderValue::from_str(&cookie.to_string()).unwrap()
+    // }).collect();
+    // self.cookie_store_arc_mutex.set_cookies(
+    //     cookie_header_vals.iter(), Url::parse("https://schools.brightwheel.com/").unwrap()
+    // );
+    let mut guard = cookie_store_arc_mutex.lock().unwrap();
+    guard.clear();
+    let request_url = Url::parse("https://schools.mybrightwheel.com").unwrap();
+    for cookie in cookies {
+        if cookie.name().eq_ignore_ascii_case("_brightwheel_v2") {
+            // let mut cookie = cookie;
+            // cookie.set_http_only(None);
+            // cookie.set_secure(None);
+            // cookie.set_same_site(None);;
+            let cookie_str = cookie.to_string();
+            println!("cookie_str = {}", cookie_str);
+            let cookie = cookie_store::Cookie::parse(cookie_str, &request_url).unwrap();
+            guard.insert(
+                cookie, &request_url
+            ).unwrap();
+        }
     }
-    else {
-        BackendState::LoggedOut(LoggedOutState {
-        })
-    };
+    // self.client = make_client(cookie_store_from_tauri_cookies(cookies));
+}
+
+fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
+    // let (already_logged_in, cookie_store) = init_cookie_store(&app);
+    // let mut cookies_opt: Option<Vec<Cookie<'static>>> = None;
+    let cookie_store_arc_mutex = Arc::new(
+        CookieStoreMutex::new(reqwest_cookie_store::CookieStore::new())
+    );
+    let mut bw_client = BrightwheelClient::new(cookie_store_arc_mutex.clone());
+    let mut state = BackendState::LoggedOut(LoggedOutState { });
 
     // Launch sync engine thread
     let (sync_sender, sync_receiver) = std::sync::mpsc::channel();
     {
         let app_2 = app.clone();
         let output_root = get_output_dir(&app_2);
-        let bw_client = bw_client.clone();
+        // let bw_client = bw_client.clone();
         std::thread::spawn(move || {
             run_sync_engine(app_2, output_root, bw_client, sync_receiver, sender);
         });
@@ -162,7 +185,10 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 Some("Test message".to_string())
             },
             BackendMessage::OnBrightwheelNavigation(url) => {
-                state = update_login_state_from_cookies(&app, state, url);
+                println!("navigation url: {:?}", url);
+                let cookies = app.get_webview_window("brightwheel").unwrap().cookies().unwrap().to_owned();
+                state = update_login_state_from_cookies(&app, state, &cookies);
+                update_cookies(&cookie_store_arc_mutex, cookies);
                 None
             },
             BackendMessage::DOMContentLoaded => {    
@@ -512,7 +538,9 @@ impl SyncEngine {
             if needs_download {
                 let dst_path_tmp = temp_dir(&self.app).join(filename);
                 self.bw_client.download_file(&item.url, &dst_path_tmp)?;
-                fs::rename(dst_path_tmp, dst_path.clone()).unwrap();
+                println!("Renaming {:?} to {:?}", dst_path_tmp, dst_path);
+                fs::copy(dst_path_tmp.clone(), dst_path.clone()).unwrap();
+                fs::remove_file(dst_path_tmp).unwrap();
 
                 // Modify system creation/modification time
                 let _ = fs::File::open(&dst_path).unwrap().set_modified(
@@ -610,13 +638,26 @@ fn sync_error(state: BackendState) -> BackendState {
     }
 }
 
-fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, url: Url) -> BackendState {
-    println!("navigation url: {}", url);
-    let cookies = app.get_webview_window("brightwheel").unwrap().cookies().unwrap();
+fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, cookies: &Vec<Cookie>) -> BackendState {
+    // println!("navigation url: {}", url);
+    // let cookies = app.get_webview_window("brightwheel").unwrap().cookies().unwrap();
+    // for cookie in cookies {
+    //     println!("got cookie: {:?}", cookie);
+    // }
+    let mut logged_in = false;
     for cookie in cookies {
-        println!("got cookie: {:?}", cookie);
+        println!("cookie: {:?}", cookie);
+        if cookie.name().eq_ignore_ascii_case("_brightwheel_v2") {
+            logged_in = true;
+        }
     }
-    state
+    
+    match state {
+        BackendState::LoggedOut(logged_out_state) => {
+            BackendState::LoggedIn(LoggedInState { })
+        },
+        _ => state
+    }
 }
 
 impl LoggedOutState {
