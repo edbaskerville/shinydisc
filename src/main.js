@@ -11,8 +11,10 @@ let gpsCoordsEl;
 let cancelSyncBtn;
 let state;
 
+/** Switch tabs. */
 export function setTab(targetTabName) {
-  for(let tabName of ["login", "loggedin", "syncing"]) {
+  // TODO: Rewrite to eliminate knowledge of tabs
+  for(let tabName of ["loggedout", "loggedin", "syncing"]) {
     let tabEl = document.querySelector("#" + tabName + "-tab");
     if(tabName == targetTabName) {
       tabEl.classList.add("tab-visible");
@@ -25,6 +27,7 @@ export function setTab(targetTabName) {
   }
 }
 
+/** Send a message to the backend as JSON to be deserialized into the Rust enum BackendMessage. */
 export function sendBackendMessage(message) {
   console.log("Sending backend message");
   invoke("send_backend_message", {
@@ -32,7 +35,7 @@ export function sendBackendMessage(message) {
   });
 }
 
-/*
+/**
   Test event from Tauri backend
 */
 listen('test-event', (event) => {
@@ -43,14 +46,14 @@ listen('test-event', (event) => {
 });
 
 /*
-  Listen to frontend
+  Listen to log messages from backend to be inserted into frontend console.
 */
 listen('log-event', (event) => {
   console.log("log message from backend:", event.payload);
 });
 
 /*
-  Listen to event updating state 
+  Listen to state updates from backend.
 */
 listen('update-state', (event) => {
   console.log(
@@ -60,12 +63,16 @@ listen('update-state', (event) => {
   updateViewFromState();
 });
 
-// The lengths to which I am avoiding a React-like dependency for this test app
+/**
+  Manual view update based on backend state.
+  
+  Intentionally avoiding a proper reactive pure-functional thing.
+*/
 function updateViewFromState() {
   let backendState = state.backend_state;
 
   if(backendState["LoggedOut"]) {
-    setTab("login");
+    setTab("loggedout");
   }
   else if(backendState["LoggedIn"]) {
     setTab("loggedin");
@@ -89,27 +96,29 @@ function updateViewFromState() {
   }
 }
 
+/**
+  Set whether all files should have metadata (GPS coordinates) updated.
+*/
 function setUpdateAllMetadata() {
   sendBackendMessage({
     "SetUpdateAllMetadata" : Boolean(metadataCheckboxEl.checked)
   });
 }
 
+/**
+  Set GPS coordinates to embed in photos and videos.
+  
+  This obviously ignores the fact that many photos are from field trips; those can be modified by parents as they desire in whatever tool they like.
+*/
 function setGPSCoords() {
   sendBackendMessage({
     "SetGPSCoords" : gpsCoordsEl.value
   });
 }
 
-function chooseOutputPathSync() {
-  chooseOutputPath().then(() => {
-    console.log("promise succeeded");
-  },
-  () => {
-    console.log("promise failed");
-  });
-}
-
+/**
+  Choose output path using the system file chooser.
+*/
 async function chooseOutputPath() {
   const output_dir = await tauri.dialog.open({
     multiple: false,
@@ -122,12 +131,6 @@ async function chooseOutputPath() {
     });
   }
 }
-
-listen('sync-update', (event) => {
-  console.log(
-    `got sync-update: ${event.payload}`
-  );
-});
 
 window.addEventListener("DOMContentLoaded", () => {
   sendBackendMessage({DOMContentLoaded: null});

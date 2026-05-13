@@ -7,6 +7,7 @@
     <title>Tauri App</title>
     <script type="module" src="/main.js"></script>
     <script type="module">
+      // For interactive testing
       import { setTab, sendBackendMessage } from "./main.js";
       window.setTab = setTab;
       window.sendBackendMessage = sendBackendMessage;
@@ -17,7 +18,7 @@
     <main class="container">
       <h1>shinydisc: sync your brightwheel photos</h1>
 
-      <div class="tab-visible" id="login-tab">
+      <div class="tab-visible" id="loggedout-tab">
         <p class="row">
           Not Logged In
         </p>
@@ -38,9 +39,6 @@
           </p>
           <p class="row">
             <button type="submit">Sync</button>
-          </p>
-          <p class="row">
-            <button id="log-out-btn" type="button">Log Out</button>
           </p>
         </form>
       </div>
