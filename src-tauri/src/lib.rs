@@ -38,12 +38,6 @@ enum BackendState {
 struct LoggedOutState {
 }
 
-// #[derive(Serialize, Deserialize, Debug, Clone)]
-// struct NeedsMfaState {
-//     email: String,
-//     password: String,
-// }
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct LoggedInState {
 }
@@ -132,21 +126,11 @@ pub fn run() {
 }
 
 pub fn update_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>, cookies: Vec<tauri::webview::Cookie<'static>>) {
-    // let cookie_header_vals: Vec<_> = cookies.iter().map(|cookie| {
-    //     HeaderValue::from_str(&cookie.to_string()).unwrap()
-    // }).collect();
-    // self.cookie_store_arc_mutex.set_cookies(
-    //     cookie_header_vals.iter(), Url::parse("https://schools.brightwheel.com/").unwrap()
-    // );
     let mut guard = cookie_store_arc_mutex.lock().unwrap();
     guard.clear();
     let request_url = Url::parse("https://schools.mybrightwheel.com").unwrap();
     for cookie in cookies {
         if cookie.name().eq_ignore_ascii_case("_brightwheel_v2") {
-            // let mut cookie = cookie;
-            // cookie.set_http_only(None);
-            // cookie.set_secure(None);
-            // cookie.set_same_site(None);;
             let cookie_str = cookie.to_string();
             println!("cookie_str = {}", cookie_str);
             let cookie = cookie_store::Cookie::parse(cookie_str, &request_url).unwrap();
@@ -159,8 +143,6 @@ pub fn update_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>, cookies: V
 }
 
 fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
-    // let (already_logged_in, cookie_store) = init_cookie_store(&app);
-    // let mut cookies_opt: Option<Vec<Cookie<'static>>> = None;
     let cookie_store_arc_mutex = Arc::new(
         CookieStoreMutex::new(reqwest_cookie_store::CookieStore::new())
     );
@@ -172,7 +154,6 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
     {
         let app_2 = app.clone();
         let output_root = get_output_dir(&app_2);
-        // let bw_client = bw_client.clone();
         std::thread::spawn(move || {
             run_sync_engine(app_2, output_root, bw_client, sync_receiver, sender);
         });
@@ -639,11 +620,6 @@ fn sync_error(state: BackendState) -> BackendState {
 }
 
 fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, cookies: &Vec<Cookie>) -> BackendState {
-    // println!("navigation url: {}", url);
-    // let cookies = app.get_webview_window("brightwheel").unwrap().cookies().unwrap();
-    // for cookie in cookies {
-    //     println!("got cookie: {:?}", cookie);
-    // }
     let mut logged_in = false;
     for cookie in cookies {
         println!("cookie: {:?}", cookie);
