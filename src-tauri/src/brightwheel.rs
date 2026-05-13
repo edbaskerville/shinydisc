@@ -1,6 +1,5 @@
 use std::{path::PathBuf, sync::{Arc, Mutex}, time::Duration};
-
-const URL_BASE: &str = "https://schools.mybrightwheel.com/api/v1";
+use lazy_static::lazy_static;
 
 use reqwest::{
     blocking::{Client, Response}, cookie::CookieStore, header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, ORIGIN, REFERER, USER_AGENT}
@@ -9,6 +8,13 @@ use tauri::{Url, webview};
 use reqwest_cookie_store::{CookieStoreMutex, RawCookieParseError};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+
+pub const BRIGHTWHEEL_URL_BASE: &str = "https://schools.mybrightwheel.com";
+lazy_static! {
+    pub static ref API_URL_BASE: String = {
+        format!("{}/api/v1", BRIGHTWHEEL_URL_BASE)
+    };
+}
 
 pub struct BrightwheelClient {
     client: Client,
@@ -34,7 +40,7 @@ impl BrightwheelClient {
     }
 
     pub fn get_users_me(&self) -> reqwest::Result<Response> {
-        let request = self.client.get(format!("{}/users/me", URL_BASE)).build().unwrap();
+        let request = self.client.get(format!("{}/users/me", *API_URL_BASE)).build().unwrap();
         self.client.execute(request)
     }
 
@@ -54,7 +60,7 @@ impl BrightwheelClient {
     }
 
     pub fn get_guardians_students(&self, user_id: String) -> reqwest::Result<Response> {
-        let request = self.client.get(format!("{}/guardians/{}/students", URL_BASE, user_id)).build().unwrap();
+        let request = self.client.get(format!("{}/guardians/{}/students", *API_URL_BASE, user_id)).build().unwrap();
         self.client.execute(request)
     }
 
@@ -102,7 +108,7 @@ impl BrightwheelClient {
 
     pub fn get_students_activities(&self, student_id: String, page_size: usize, page: usize) -> reqwest::Result<Response> {
         let request = self.client.get(
-            format!("{}/students/{}/activities", URL_BASE, student_id)
+            format!("{}/students/{}/activities", *API_URL_BASE, student_id)
         ).query(
             &[("page_size", page_size), ("page", page)]
         ).build().unwrap();

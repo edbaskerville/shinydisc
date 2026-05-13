@@ -3990,6 +3990,7 @@ dependencies = [
  "cookie_store",
  "exiftool",
  "jiff",
+ "lazy_static",
  "map-macro",
  "reqwest 0.13.3",
  "reqwest_cookie_store",

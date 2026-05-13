@@ -127,7 +127,7 @@ pub fn run() {
 pub fn update_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>, cookies: Vec<tauri::webview::Cookie<'static>>) {
     let mut guard = cookie_store_arc_mutex.lock().unwrap();
     guard.clear();
-    let request_url = Url::parse("https://schools.mybrightwheel.com").unwrap();
+    let request_url = Url::parse(brightwheel::BRIGHTWHEEL_URL_BASE).unwrap();
     for cookie in cookies {
         if cookie.name().eq_ignore_ascii_case("_brightwheel_v2") {
             let cookie_str = cookie.to_string();
