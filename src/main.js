@@ -65,7 +65,7 @@ listen('update-state', (event) => {
 
 /**
   Manual view update based on backend state.
-  
+
   Intentionally avoiding a proper reactive pure-functional thing.
 */
 function updateViewFromState() {
@@ -107,7 +107,7 @@ function setUpdateAllMetadata() {
 
 /**
   Set GPS coordinates to embed in photos and videos.
-  
+
   This obviously ignores the fact that many photos are from field trips; those can be modified by parents as they desire in whatever tool they like.
 */
 function setGPSCoords() {
@@ -134,7 +134,7 @@ async function chooseOutputPath() {
 
 window.addEventListener("DOMContentLoaded", () => {
   sendBackendMessage({DOMContentLoaded: null});
-  
+
   messageEl = document.querySelector("#message-p");
   outputDirEl = document.querySelector("#output-dir-p");
   metadataCheckboxEl = document.querySelector("#metadata-checkbox");

@@ -28,7 +28,6 @@ struct FrontendState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BackendState {
     LoggedOut(LoggedOutState),
-    // NeedsMfa(NeedsMfaState),
     LoggedIn(LoggedInState),
     Syncing(SyncingState),
     SyncCanceling(SyncCancelingState),
@@ -90,7 +89,7 @@ pub fn run() {
     let app = Builder::default()
         .setup(|app| {
             app.manage(backend_sender_app_manage);
-            
+
             let wvw_brightwheel = WebviewWindowBuilder::new(
                 app, "brightwheel",
                 WebviewUrl::External(
@@ -100,10 +99,10 @@ pub fn run() {
                 backend_sender_on_navigation.send(
                     BackendMessage::OnBrightwheelNavigation(url.clone())
                 ).unwrap();
-                
+
                 true
             }).build();
-            
+
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())
@@ -139,7 +138,6 @@ pub fn update_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>, cookies: V
             ).unwrap();
         }
     }
-    // self.client = make_client(cookie_store_from_tauri_cookies(cookies));
 }
 
 fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle) {
@@ -172,7 +170,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 update_cookies(&cookie_store_arc_mutex, cookies);
                 None
             },
-            BackendMessage::DOMContentLoaded => {    
+            BackendMessage::DOMContentLoaded => {
                 log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
                 None
             },
@@ -196,7 +194,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 Some(format!("Querying items from page {}", page + 1))
             },
             BackendMessage::QueriedItems { page, count } => {
-                Some(format!("Query found {} items on page {}", count, page + 1)) 
+                Some(format!("Query found {} items on page {}", count, page + 1))
             },
             BackendMessage::ProcessingItem {
                 needs_download,
@@ -395,7 +393,7 @@ impl SyncEngine {
         }
     }
 
-    fn sync(&mut self) -> reqwest::Result<()> {    
+    fn sync(&mut self) -> reqwest::Result<()> {
         // Get user_id
         let user_id = self.bw_client.get_user_id()?;
         println!("got user_id: {}", user_id);
@@ -424,7 +422,6 @@ impl SyncEngine {
     fn enqueue_sync_items(&mut self, student: &Student) -> reqwest::Result<()> {
         println!("enqueue_sync_items: {} {}", student.first_name, student.last_name);
 
-        // let mut sync_items = Vec::new();
         let mut page: usize = 0;
         loop {
             self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
@@ -499,7 +496,7 @@ impl SyncEngine {
 
     fn sync_next_item(&mut self) -> reqwest::Result<bool> {
         // println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
-        
+
         if self.sync_index < self.sync_items.len() {
             let item = &self.sync_items[self.sync_index];
 
@@ -540,7 +537,7 @@ impl SyncEngine {
                     println!("{}", line);
                 }
             }
-            
+
             self.sync_index += 1;
             if self.sync_index == self.sync_items.len() {
                 self.sync_index = 0;
@@ -627,7 +624,7 @@ fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, cookies
             logged_in = true;
         }
     }
-    
+
     match state {
         BackendState::LoggedOut(logged_out_state) => {
             BackendState::LoggedIn(LoggedInState { })
@@ -828,7 +825,7 @@ fn init_cookie_store(app: &AppHandle) -> (bool, reqwest_cookie_store::CookieStor
     if let Ok(file) = std::fs::File::open(cookies_path(app))
         .map(std::io::BufReader::new) {
         println!("Opened cookies.json");
-        
+
         (true, reqwest_cookie_store::CookieStore::load_json(file).unwrap())
     }
     else
