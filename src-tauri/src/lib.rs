@@ -90,18 +90,16 @@ pub fn run() {
         .setup(|app| {
             app.manage(backend_sender_app_manage);
 
-            let wvw_brightwheel = WebviewWindowBuilder::new(
-                app, "brightwheel",
-                WebviewUrl::External(
-                    Url::parse("https://schools.mybrightwheel.com").unwrap()
-                )
+            let _wvw = WebviewWindowBuilder::new(
+                app, "main",
+                WebviewUrl::App("index.html".into())
             ).on_navigation(move |url| {
                 backend_sender_on_navigation.send(
                     BackendMessage::OnBrightwheelNavigation(url.clone())
                 ).unwrap();
 
                 true
-            }).build();
+            }).title("shinydisc").build();
 
             Ok(())
         })
@@ -148,12 +146,12 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
     let mut state = BackendState::LoggedOut(LoggedOutState { });
 
     // Launch sync engine thread
-    let (sync_sender, sync_receiver) = std::sync::mpsc::channel();
+    let (io_sender, io_receiver) = std::sync::mpsc::channel();
     {
         let app_2 = app.clone();
         let output_root = get_output_dir(&app_2);
         std::thread::spawn(move || {
-            run_sync_engine(app_2, output_root, bw_client, sync_receiver, sender);
+            run_sync_engine(app_2, output_root, bw_client, io_receiver, sender);
         });
     }
 
@@ -165,7 +163,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             },
             BackendMessage::OnBrightwheelNavigation(url) => {
                 println!("navigation url: {:?}", url);
-                let cookies = app.get_webview_window("brightwheel").unwrap().cookies().unwrap().to_owned();
+                let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
                 state = update_login_state_from_cookies(&app, state, &cookies);
                 update_cookies(&cookie_store_arc_mutex, cookies);
                 None
@@ -187,7 +185,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 Some("GPS coordinates set.".to_string())
             },
             BackendMessage::Sync => {
-                state = sync(state, &sync_sender);
+                state = sync(state, &io_sender);
                 None
             },
             BackendMessage::QueryingItems { page } => {
@@ -219,7 +217,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 Some(message)
             },
             BackendMessage::CancelSync => {
-                state = cancel_sync(state, &sync_sender);
+                state = cancel_sync(state, &io_sender);
                 Some("Cancelling...".to_string())
             },
             BackendMessage::SyncCanceled => {
@@ -288,13 +286,13 @@ fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message:
 /*** SYNC ***/
 
 #[derive(Serialize, Deserialize, Clone)]
-enum SyncMessage {
+enum IOMessage {
     Sync,
     Cancel,
 }
 
-type SyncSender = std::sync::mpsc::Sender<SyncMessage>;
-type SyncReceiver = std::sync::mpsc::Receiver<SyncMessage>;
+type IOSender = std::sync::mpsc::Sender<IOMessage>;
+type IOReceiver = std::sync::mpsc::Receiver<IOMessage>;
 
 #[derive(Clone)]
 struct SyncItem {
@@ -305,36 +303,36 @@ struct SyncItem {
     extension: String,
 }
 
-fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelClient, sync_receiver: SyncReceiver, backend_sender: BackendSender) {
+fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelClient, io_receiver: IOReceiver, backend_sender: BackendSender) {
     let exiftool_path: PathBuf = app.path().resource_dir().unwrap().join("exiftool").join("exiftool");
     println!("exiftool_path: {}", exiftool_path.to_str().unwrap());
     let exif_tool = ExifTool::with_executable(&exiftool_path).unwrap();
 
-    let mut sync_engine = SyncEngine {
+    let mut io_service = IOService {
         output_root,
         app,
         bw_client,
-        sync_receiver,
+        io_receiver,
         backend_sender,
         exif_tool,
         sync_index: 0,
         sync_items: Vec::new()
     };
-    sync_engine.run();
+    io_service.run();
 }
 
-struct SyncEngine {
+struct IOService {
     output_root: PathBuf,
     app: AppHandle,
     bw_client: BrightwheelClient,
-    sync_receiver: SyncReceiver,
+    io_receiver: IOReceiver,
     backend_sender: BackendSender,
     exif_tool: ExifTool,
     sync_index: usize,
     sync_items: Vec<SyncItem>,
 }
 
-impl SyncEngine {
+impl IOService {
     const PAGE_SIZE: usize = 1000;
 
     fn run(&mut self) {
@@ -342,13 +340,13 @@ impl SyncEngine {
             match self.sync_next_item() {
                 Ok(synced) => {
                     if synced {
-                        match self.sync_receiver.try_recv() {
+                        match self.io_receiver.try_recv() {
                             Ok(msg) => {
                                 match msg {
-                                    SyncMessage::Sync => {
+                                    IOMessage::Sync => {
                                         println!("Should not receive sync message while downloading");
                                     },
-                                    SyncMessage::Cancel => {
+                                    IOMessage::Cancel => {
                                         self.sync_index = 0;
                                         self.sync_items.clear();
                                         self.backend_sender.send(BackendMessage::SyncCanceled).unwrap();
@@ -359,15 +357,15 @@ impl SyncEngine {
                                 match e {
                                     std::sync::mpsc::TryRecvError::Empty => { },
                                     std::sync::mpsc::TryRecvError::Disconnected => {
-                                        panic!("Should never get disconnected from sync engine channel");
+                                        panic!("Should never get disconnected from IOService channel");
                                     },
                                 }
                             },
                         }
                     }
                     else {
-                        match self.sync_receiver.recv().unwrap() {
-                            SyncMessage::Sync => {
+                        match self.io_receiver.recv().unwrap() {
+                            IOMessage::Sync => {
                                 if let Err(e) = self.sync() {
                                     self.sync_index = 0;
                                     self.sync_items.clear();
@@ -376,7 +374,7 @@ impl SyncEngine {
                                     ).unwrap();
                                 }
                             },
-                            SyncMessage::Cancel => {
+                            IOMessage::Cancel => {
                                 println!("Nothing to cancel");
                             },
                         }
@@ -557,10 +555,10 @@ impl SyncEngine {
     }
 }
 
-fn sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
+fn sync(state: BackendState, io_sender: &IOSender) -> BackendState {
     match state {
         BackendState::LoggedIn(logged_in_state) => {
-            logged_in_state.sync(sync_sender)
+            logged_in_state.sync(io_sender)
         },
         _ => {
             println!("Unexpected state for sync: {:?}", state);
@@ -569,10 +567,10 @@ fn sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
     }
 }
 
-fn cancel_sync(state: BackendState, sync_sender: &SyncSender) -> BackendState {
+fn cancel_sync(state: BackendState, io_sender: &IOSender) -> BackendState {
     match state {
         BackendState::Syncing(syncing_state) => {
-            syncing_state.cancel_sync(sync_sender)
+            syncing_state.cancel_sync(io_sender)
         },
         _ => {
             println!("Unexpected state for cancel sync: {:?}", state);
@@ -640,15 +638,15 @@ impl LoggedOutState {
 }
 
 impl LoggedInState {
-    fn sync(self, sync_sender: &SyncSender) -> BackendState {
-        sync_sender.send(SyncMessage::Sync).unwrap();
+    fn sync(self, io_sender: &IOSender) -> BackendState {
+        io_sender.send(IOMessage::Sync).unwrap();
         BackendState::Syncing(SyncingState { })
     }
 }
 
 impl SyncingState {
-    fn cancel_sync(self, sync_sender: &SyncSender) -> BackendState {
-        sync_sender.send(SyncMessage::Cancel).unwrap();
+    fn cancel_sync(self, io_sender: &IOSender) -> BackendState {
+        io_sender.send(IOMessage::Cancel).unwrap();
         BackendState::SyncCanceling(SyncCancelingState { })
     }
 
