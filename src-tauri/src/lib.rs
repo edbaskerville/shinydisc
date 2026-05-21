@@ -61,6 +61,7 @@ enum BackendMessage {
     SetUpdateAllMetadata(bool),
     SetGPSCoords(String),
     Sync,
+    LogOut,
     QueryingItems {
         page: usize,
     },
@@ -124,7 +125,15 @@ pub fn run() {
     app.run(|_app, _event| { });
 }
 
-pub fn update_cookies(cookie_store_arc_mutex: &Arc<CookieStoreMutex>, cookies: Vec<tauri::webview::Cookie<'static>>) {
+pub fn clear_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
+    app.get_webview_window("main").unwrap().clear_all_browsing_data().unwrap();
+    let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
+    let mut guard = cookie_store_arc_mutex.lock().unwrap();
+    guard.clear();
+}
+
+pub fn update_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {
+    let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
     let mut guard = cookie_store_arc_mutex.lock().unwrap();
     guard.clear();
     let request_url = Url::parse(brightwheel::BRIGHTWHEEL_URL_BASE).unwrap();
@@ -156,7 +165,6 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             run_sync_engine(app_2, output_root, bw_client, io_receiver, sender);
         });
     }
-    io_sender.send(IOMessage::TestLogin).unwrap();
 
     let mut base_url_opt: Option<Url> = None;
 
@@ -167,21 +175,38 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 Some("Test message".to_string())
             },
             BackendMessage::LoginTestFinished(logged_in) => {
+                update_cookies(&app, &cookie_store_arc_mutex);
                 if logged_in {
-                    let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
-                    update_cookies(&cookie_store_arc_mutex, cookies);
                     state = match state {
-                        BackendState::LoggedOut(_) => BackendState::LoggedIn(LoggedInState {  }),
+                        BackendState::LoggedOut(_) => {
+                            navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
+                            BackendState::LoggedIn(LoggedInState {  })
+                        },
+                        BackendState::LoggingIn => {
+                            navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
+                            BackendState::LoggedIn(LoggedInState { })
+                        },
                         _ => state,
                     };
                 }
                 else {
                     state = match state {
                         BackendState::LoggedOut(_) => {
-                            initiate_login(&app);
+                            // This message comes from the initial login test.
+                            // Need to initiate login.
+                            initiate_login(&app, &io_sender);
                             BackendState::LoggingIn
                         },
-                        _ => BackendState::LoggedOut(LoggedOutState { }),
+                        BackendState::LoggingIn => {
+                            // If we were already in the logging-in state, resubmit the login test after a delay
+                            // until we're logged in.
+                            io_sender.send(IOMessage::Sleep(2.0)).unwrap();
+                            io_sender.send(IOMessage::TestLogin).unwrap();
+                            BackendState::LoggingIn
+                        },
+                        _ => {
+                            panic!("Got login test result in nonsensical state. This is a logic error.");
+                        },
                     }
                 }
                 None
@@ -196,6 +221,9 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             BackendMessage::DOMContentLoaded => {
                 if base_url_opt.is_none() {
                     base_url_opt = Some(app.get_webview_window("main").unwrap().url().unwrap());
+                    update_cookies(&app, &cookie_store_arc_mutex);
+                    io_sender.send(IOMessage::TestLogin).unwrap();
+
                 }
                 log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
                 None
@@ -214,6 +242,12 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             },
             BackendMessage::Sync => {
                 state = sync(state, &io_sender);
+                None
+            },
+            BackendMessage::LogOut => {
+                clear_cookies(&app, &cookie_store_arc_mutex);
+                state = BackendState::LoggingIn;
+                initiate_login(&app, &io_sender);
                 None
             },
             BackendMessage::QueryingItems { page } => {
@@ -260,8 +294,8 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 break;
             }
         };
-        println!("frontend_message: {:?}", frontend_message);
-        update_state(&app, &state, &base_url_opt, frontend_message);
+        // println!("frontend_message: {:?}", frontend_message);
+        // update_state(&app, &state, &base_url_opt, frontend_message);
     }
 }
 
@@ -296,50 +330,62 @@ fn log_to_frontend(app: &AppHandle, log_msg: String) {
 
 /*** INITIATE LOGIN VIA BRIGHTWHEEL ***/
 
-fn initiate_login(app: &AppHandle) {
+fn initiate_login(app: &AppHandle, io_sender: &IOSender) {
     let wvw = app.get_webview_window("main").unwrap();
     wvw.navigate(Url::parse("https://schools.mybrightwheel.com/").unwrap()).unwrap();
+    io_sender.send(IOMessage::Sleep(5.0)).unwrap();
+    io_sender.send(IOMessage::TestLogin).unwrap();
 }
 
 /*** FRONTEND STATE UPDATE ***/
 
-fn update_state(app: &AppHandle, backend_state: &BackendState, base_url_opt: &Option<Url>, frontend_message: Option<String>) {
+fn navigate_to_local_path(app: &AppHandle, base_url_opt: &Option<Url>, path_str: &str) {
     if let Some(base_url) = base_url_opt {
-        let url_opt = match backend_state {
-            BackendState::LoggedOut(logged_out_state) => {
-                Some(base_url.join("index.html").unwrap())
-            },
-            BackendState::LoggingIn => {
-                None
-            },
-            BackendState::LoggedIn(logged_in_state) => {
-                Some(base_url.join("loggedin.html").unwrap())
-            },
-            BackendState::Syncing(syncing_state) => {
-                Some(base_url.join("syncing.html").unwrap())
-            },
-            BackendState::SyncCanceling(sync_canceling_state) => {
-                Some(base_url.join("syncing.html?canceling=true").unwrap())
-            },
-        };
-        if let Some(url) = url_opt {
-            let wvw = app.get_webview_window("main").unwrap();
-            wvw.navigate(url).unwrap();
-        }
+        let wvw = app.get_webview_window("main").unwrap();
+        wvw.navigate(base_url.join(path_str).unwrap()).unwrap();
     }
-
-    // let config = get_config(app);
-    // let frontend_state = FrontendState {
-    //     message: frontend_message,
-    //     update_all_metadata: config.should_update_all_metadata(),
-    //     gps_coords: config.get_gps_coords(),
-    //     output_dir: config.get_output_dir(app).to_str().unwrap().into(),
-    //     backend_state: backend_state.clone(),
-    // };
-    // println!("frontend_state: {:?}", frontend_state);
-    //
-    // app.emit("update-state", frontend_state).unwrap();
+    else {
+        panic!("No base URL to navigate from");
+    }
 }
+
+// fn update_state(app: &AppHandle, backend_state: &BackendState, base_url_opt: &Option<Url>, frontend_message: Option<String>) {
+//     if let Some(base_url) = base_url_opt {
+//         let url_opt = match backend_state {
+//             BackendState::LoggedOut(logged_out_state) => {
+//                 Some(base_url.join("index.html").unwrap())
+//             },
+//             BackendState::LoggingIn => {
+//                 None
+//             },
+//             BackendState::LoggedIn(logged_in_state) => {
+//                 Some(base_url.join("loggedin.html").unwrap())
+//             },
+//             BackendState::Syncing(syncing_state) => {
+//                 Some(base_url.join("syncing.html").unwrap())
+//             },
+//             BackendState::SyncCanceling(sync_canceling_state) => {
+//                 Some(base_url.join("syncing.html?canceling=true").unwrap())
+//             },
+//         };
+//         if let Some(url) = url_opt {
+//             let wvw = app.get_webview_window("main").unwrap();
+//             wvw.navigate(url).unwrap();
+//         }
+//     }
+//
+//     // let config = get_config(app);
+//     // let frontend_state = FrontendState {
+//     //     message: frontend_message,
+//     //     update_all_metadata: config.should_update_all_metadata(),
+//     //     gps_coords: config.get_gps_coords(),
+//     //     output_dir: config.get_output_dir(app).to_str().unwrap().into(),
+//     //     backend_state: backend_state.clone(),
+//     // };
+//     // println!("frontend_state: {:?}", frontend_state);
+//     //
+//     // app.emit("update-state", frontend_state).unwrap();
+// }
 
 
 /*** SYNC ***/
@@ -348,6 +394,7 @@ fn update_state(app: &AppHandle, backend_state: &BackendState, base_url_opt: &Op
 enum IOMessage {
     // Sync,
     // Cancel,
+    Sleep(f64),
     TestLogin,
 }
 
@@ -398,6 +445,9 @@ impl IOService {
     fn run(&mut self) {
         loop {
             match self.io_receiver.recv().unwrap() {
+                IOMessage::Sleep(secs) => {
+                    std::thread::sleep(Duration::from_secs_f64(secs));
+                },
                 IOMessage::TestLogin => {
                     match self.bw_client.get_login_test() {
                         Ok(logged_in) => {

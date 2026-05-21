@@ -43,8 +43,13 @@ impl BrightwheelClient {
         self.get_users_me().map(|response| {
             match response.json::<Value>() {
                 Ok(json) => {
-                    println!("json: {:?}", json);
-                    false
+                    println!("login test json: {:?}", json);
+                    if let Some(json_obj) = json.as_object() {
+                        json_obj.contains_key("object_id")
+                    }
+                    else {
+                        false
+                    }
                 },
                 Err(e) => {
                     println!("get_login_test json parse err: {:?}", e);

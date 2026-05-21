@@ -28,7 +28,7 @@ const tauri = window.__TAURI__;
 // }
 
 /** Send a message to the backend as JSON to be deserialized into the Rust enum BackendMessage. */
-export function sendBackendMessage(message) {
+function sendBackendMessage(message) {
   console.log("Sending backend message");
   invoke("send_backend_message", {
     "message" : message
