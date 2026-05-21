@@ -2,8 +2,8 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "resources" : {
-      "../exiftool/exiftool" : "exiftool/exiftool",
-      "../exiftool/lib" : "exiftool/lib"
+      "exiftool/exiftool" : "exiftool/exiftool",
+      "exiftool/lib" : "exiftool/lib"
     }
   }
 }
