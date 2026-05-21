@@ -92,18 +92,6 @@ pub fn run() {
     let app = Builder::default()
         .setup(|app| {
             app.manage(backend_sender_app_manage);
-
-            let _wvw = WebviewWindowBuilder::new(
-                app, "main",
-                WebviewUrl::App("index.html".into())
-            )/*.on_navigation(move |url| {
-                backend_sender_on_navigation.send(
-                    BackendMessage::OnBrightwheelNavigation(url.clone())
-                ).unwrap();
-
-                true
-            })*/.title("shinydisc").build();
-
             Ok(())
         })
         .plugin(tauri_plugin_dialog::init())

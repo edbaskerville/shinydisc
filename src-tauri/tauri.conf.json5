@@ -9,20 +9,13 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [
-      // {
-      //   "label": "brightwheel",
-      //   "title": "brightwheel",
-      //   "url": "https://schools.mybrightwheel.com",
-      //   "width": 800,
-      //   "height": 600
-      // },
-      // {
-      //   "label": "main",
-      //   "title": "shinydisc",
-      //   "width": 800,
-      //   "height": 600,
-      //   "url": "index.html"
-      // }
+      {
+        "label": "main",
+        "title": "shinydisc",
+        "width": 800,
+        "height": 600,
+        "url": "index.html"
+      }
     ],
     "security": {
       "csp": null
