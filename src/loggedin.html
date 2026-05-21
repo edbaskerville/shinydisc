@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>shinydisc | Logged In</title>
+    <script type="module" src="/main.js"></script>
+    <script type="module">
+      // /**
+      //   Set whether all files should have metadata (GPS coordinates) updated.
+      // */
+      // function setUpdateAllMetadata() {
+      //   let metadataCheckboxEl = document.querySelector("#metadata-checkbox");
+      //   sendBackendMessage({
+      //     "SetUpdateAllMetadata" : Boolean(metadataCheckboxEl.checked)
+      //   });
+      // }
+
+      /**
+        Set GPS coordinates to embed in photos and videos.
+
+        This obviously ignores the fact that many photos are from field trips; those can be modified by parents as they desire in whatever tool they like.
+      */
+      // function setGPSCoords() {
+      //   sendBackendMessage({
+      //     "SetGPSCoords" : gpsCoordsEl.value
+      //   });
+      // }
+
+      /**
+        Choose output path using the system file chooser.
+      */
+      async function chooseOutputPath() {
+        const output_dir = await tauri.dialog.open({
+          multiple: false,
+          directory: true,
+          defaultPath: outputDirEl.innerText,
+        });
+        if(output_dir) {
+          let outputDirEl = document.querySelector("#output-dir-p");
+          outputDirEl.innerText = output_dir;
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>shinydisc</h1>
+      <p class="row">
+        <button id="choose-folder-button" type="button" onmouseup="chooseOutputPath();">Choose Folder...</button>
+      </p>
+      <p class="row" id="output-dir-p">
+      </p>
+      <p class="row">
+        <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps"></input>
+      </p>
+      <p class="row">
+        <input type="checkbox" id="metadata-checkbox">Update GPS coords for all files</input>
+      </p>
+      <p class="row">
+        <button id="sync" type="button" onmouseup="sync();">Sync</button>
+      </p>
+    </main>
+  </body>
+</html>

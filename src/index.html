@@ -4,10 +4,9 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
+    <title>Logged Out</title>
     <script type="module" src="/main.js"></script>
     <script type="module">
-      // For interactive testing
       import { setTab, sendBackendMessage } from "./main.js";
       window.setTab = setTab;
       window.sendBackendMessage = sendBackendMessage;
@@ -16,47 +15,10 @@
 
   <body>
     <main class="container">
-      <h1>shinydisc: sync your brightwheel photos</h1>
-      <a href="https://schools.mybrightwheel.com">go to brightwheel</a>
-      <div class="tab-visible" id="loggedout-tab">
-        <p class="row">
-          Not Logged In
-        </p>
-      </div>
-
-      <div class="tab-hidden" id="loggedin-tab">
-        <form id="loggedin-form">
-          <p class="row">
-            <button id="choose-folder-button" type="button">Choose Folder...</button>
-          </p>
-          <p class="row" id="output-dir-p">
-          </p>
-          <p class="row">
-            <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps"></input>
-          </p>
-          <p class="row">
-            <input type="checkbox" id="metadata-checkbox">Update metadata for all files</input>
-          </p>
-          <p class="row">
-            <button type="submit">Sync</button>
-          </p>
-        </form>
-      </div>
-
-      <div class="tab-hidden" id="syncing-tab">
-        <form id="syncing-form">
-          <p class="row">
-            Syncing...
-          </p>
-          <p class="row">
-            <button type="submit" id="cancel-sync-btn">Cancel Sync</button>
-          </p>
-        </form>
-      </div>
-
-      <div id="message-div">
-          <p class="row" id="message-p"></p>
-      </div>
+      <h1>shinydisc</h1>
+      <p class="row">
+        Attempting Brightwheel sign-in...
+      </p>
     </main>
   </body>
 </html>

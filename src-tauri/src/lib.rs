@@ -7,7 +7,7 @@ use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Builder, Emitter, Manager, Url, webview::{WebviewWindowBuilder, Cookie}, utils::config::WebviewUrl};
+use tauri::{AppHandle, Builder, Emitter, Manager, Url, webview::{WebviewWindowBuilder}, utils::config::WebviewUrl};
 
 use exiftool::ExifTool;
 
@@ -28,6 +28,7 @@ struct FrontendState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BackendState {
     LoggedOut(LoggedOutState),
+    LoggingIn,
     LoggedIn(LoggedInState),
     Syncing(SyncingState),
     SyncCanceling(SyncCancelingState),
@@ -53,7 +54,8 @@ struct SyncCancelingState {
 #[derive(Serialize, Deserialize, Clone)]
 enum BackendMessage {
     Test,
-    OnBrightwheelNavigation(Url),
+    LoginTestFinished(bool),
+    // OnBrightwheelNavigation(Url),
     DOMContentLoaded,
     SetOutputDir(String),
     SetUpdateAllMetadata(bool),
@@ -84,7 +86,7 @@ enum BackendMessage {
 pub fn run() {
     let (backend_sender, backend_receiver) = std::sync::mpsc::channel();
     let backend_sender_app_manage = backend_sender.clone();
-    let backend_sender_on_navigation = backend_sender.clone();
+    // let backend_sender_on_navigation = backend_sender.clone();
 
     let app = Builder::default()
         .setup(|app| {
@@ -93,13 +95,13 @@ pub fn run() {
             let _wvw = WebviewWindowBuilder::new(
                 app, "main",
                 WebviewUrl::App("index.html".into())
-            ).on_navigation(move |url| {
+            )/*.on_navigation(move |url| {
                 backend_sender_on_navigation.send(
                     BackendMessage::OnBrightwheelNavigation(url.clone())
                 ).unwrap();
 
                 true
-            }).title("shinydisc").build();
+            })*/.title("shinydisc").build();
 
             Ok(())
         })
@@ -142,10 +144,10 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
     let cookie_store_arc_mutex = Arc::new(
         CookieStoreMutex::new(reqwest_cookie_store::CookieStore::new())
     );
-    let mut bw_client = BrightwheelClient::new(cookie_store_arc_mutex.clone());
+    let bw_client = BrightwheelClient::new(cookie_store_arc_mutex.clone());
     let mut state = BackendState::LoggedOut(LoggedOutState { });
 
-    // Launch sync engine thread
+    // Launch IO thread (thus avoiding the horrors of Rust async)
     let (io_sender, io_receiver) = std::sync::mpsc::channel();
     {
         let app_2 = app.clone();
@@ -154,6 +156,9 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             run_sync_engine(app_2, output_root, bw_client, io_receiver, sender);
         });
     }
+    io_sender.send(IOMessage::TestLogin).unwrap();
+
+    let mut base_url_opt: Option<Url> = None;
 
     loop {
         let frontend_message = match receiver.recv().unwrap() {
@@ -161,14 +166,37 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 respond_to_test_message(&app);
                 Some("Test message".to_string())
             },
-            BackendMessage::OnBrightwheelNavigation(url) => {
-                println!("navigation url: {:?}", url);
-                let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
-                state = update_login_state_from_cookies(&app, state, &cookies);
-                update_cookies(&cookie_store_arc_mutex, cookies);
+            BackendMessage::LoginTestFinished(logged_in) => {
+                if logged_in {
+                    let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
+                    update_cookies(&cookie_store_arc_mutex, cookies);
+                    state = match state {
+                        BackendState::LoggedOut(_) => BackendState::LoggedIn(LoggedInState {  }),
+                        _ => state,
+                    };
+                }
+                else {
+                    state = match state {
+                        BackendState::LoggedOut(_) => {
+                            initiate_login(&app);
+                            BackendState::LoggingIn
+                        },
+                        _ => BackendState::LoggedOut(LoggedOutState { }),
+                    }
+                }
                 None
             },
+            // BackendMessage::OnBrightwheelNavigation(url) => {
+            //     println!("navigation url: {:?}", url);
+            //     // let cookies = app.get_webview_window("main").unwrap().cookies().unwrap().to_owned();
+            //     // state = update_login_state_from_cookies(&app, state, &cookies);
+            //     // update_cookies(&cookie_store_arc_mutex, cookies);
+            //     None
+            // },
             BackendMessage::DOMContentLoaded => {
+                if base_url_opt.is_none() {
+                    base_url_opt = Some(app.get_webview_window("main").unwrap().url().unwrap());
+                }
                 log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
                 None
             },
@@ -233,7 +261,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             }
         };
         println!("frontend_message: {:?}", frontend_message);
-        update_state(&app, &state, frontend_message);
+        update_state(&app, &state, &base_url_opt, frontend_message);
     }
 }
 
@@ -266,20 +294,51 @@ fn log_to_frontend(app: &AppHandle, log_msg: String) {
     app.emit("log-event", log_msg).unwrap();
 }
 
+/*** INITIATE LOGIN VIA BRIGHTWHEEL ***/
+
+fn initiate_login(app: &AppHandle) {
+    let wvw = app.get_webview_window("main").unwrap();
+    wvw.navigate(Url::parse("https://schools.mybrightwheel.com/").unwrap()).unwrap();
+}
+
 /*** FRONTEND STATE UPDATE ***/
 
-fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message: Option<String>) {
-    let config = get_config(app);
-    let frontend_state = FrontendState {
-        message: frontend_message,
-        update_all_metadata: config.should_update_all_metadata(),
-        gps_coords: config.get_gps_coords(),
-        output_dir: config.get_output_dir(app).to_str().unwrap().into(),
-        backend_state: backend_state.clone(),
-    };
-    println!("frontend_state: {:?}", frontend_state);
+fn update_state(app: &AppHandle, backend_state: &BackendState, base_url_opt: &Option<Url>, frontend_message: Option<String>) {
+    if let Some(base_url) = base_url_opt {
+        let url_opt = match backend_state {
+            BackendState::LoggedOut(logged_out_state) => {
+                Some(base_url.join("index.html").unwrap())
+            },
+            BackendState::LoggingIn => {
+                None
+            },
+            BackendState::LoggedIn(logged_in_state) => {
+                Some(base_url.join("loggedin.html").unwrap())
+            },
+            BackendState::Syncing(syncing_state) => {
+                Some(base_url.join("syncing.html").unwrap())
+            },
+            BackendState::SyncCanceling(sync_canceling_state) => {
+                Some(base_url.join("syncing.html?canceling=true").unwrap())
+            },
+        };
+        if let Some(url) = url_opt {
+            let wvw = app.get_webview_window("main").unwrap();
+            wvw.navigate(url).unwrap();
+        }
+    }
 
-    app.emit("update-state", frontend_state).unwrap();
+    // let config = get_config(app);
+    // let frontend_state = FrontendState {
+    //     message: frontend_message,
+    //     update_all_metadata: config.should_update_all_metadata(),
+    //     gps_coords: config.get_gps_coords(),
+    //     output_dir: config.get_output_dir(app).to_str().unwrap().into(),
+    //     backend_state: backend_state.clone(),
+    // };
+    // println!("frontend_state: {:?}", frontend_state);
+    //
+    // app.emit("update-state", frontend_state).unwrap();
 }
 
 
@@ -287,8 +346,9 @@ fn update_state(app: &AppHandle, backend_state: &BackendState, frontend_message:
 
 #[derive(Serialize, Deserialize, Clone)]
 enum IOMessage {
-    Sync,
-    Cancel,
+    // Sync,
+    // Cancel,
+    TestLogin,
 }
 
 type IOSender = std::sync::mpsc::Sender<IOMessage>;
@@ -310,26 +370,26 @@ fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelC
 
     let mut io_service = IOService {
         output_root,
-        app,
+        // app,
         bw_client,
         io_receiver,
         backend_sender,
         exif_tool,
-        sync_index: 0,
-        sync_items: Vec::new()
+        // sync_index: 0,
+        // sync_items: Vec::new()
     };
     io_service.run();
 }
 
 struct IOService {
     output_root: PathBuf,
-    app: AppHandle,
+    // app: AppHandle,
     bw_client: BrightwheelClient,
     io_receiver: IOReceiver,
     backend_sender: BackendSender,
     exif_tool: ExifTool,
-    sync_index: usize,
-    sync_items: Vec<SyncItem>,
+    // sync_index: usize,
+    // sync_items: Vec<SyncItem>,
 }
 
 impl IOService {
@@ -337,222 +397,241 @@ impl IOService {
 
     fn run(&mut self) {
         loop {
-            match self.sync_next_item() {
-                Ok(synced) => {
-                    if synced {
-                        match self.io_receiver.try_recv() {
-                            Ok(msg) => {
-                                match msg {
-                                    IOMessage::Sync => {
-                                        println!("Should not receive sync message while downloading");
-                                    },
-                                    IOMessage::Cancel => {
-                                        self.sync_index = 0;
-                                        self.sync_items.clear();
-                                        self.backend_sender.send(BackendMessage::SyncCanceled).unwrap();
-                                    },
-                                }
-                            },
-                            Err(e) => {
-                                match e {
-                                    std::sync::mpsc::TryRecvError::Empty => { },
-                                    std::sync::mpsc::TryRecvError::Disconnected => {
-                                        panic!("Should never get disconnected from IOService channel");
-                                    },
-                                }
-                            },
-                        }
-                    }
-                    else {
-                        match self.io_receiver.recv().unwrap() {
-                            IOMessage::Sync => {
-                                if let Err(e) = self.sync() {
-                                    self.sync_index = 0;
-                                    self.sync_items.clear();
-                                    self.backend_sender.send(BackendMessage::SyncError(
-                                        format!("Received error syncing: {:?}", e))
-                                    ).unwrap();
-                                }
-                            },
-                            IOMessage::Cancel => {
-                                println!("Nothing to cancel");
-                            },
+            match self.io_receiver.recv().unwrap() {
+                IOMessage::TestLogin => {
+                    match self.bw_client.get_login_test() {
+                        Ok(logged_in) => {
+                            println!("Logged In? {:?}", logged_in);
+                            self.backend_sender.send(BackendMessage::LoginTestFinished(logged_in)).unwrap();
+                        },
+                        Err(e) => {
+                            println!("get_login_test() error: {:?}", e);
                         }
                     }
                 },
-                Err(e) => {
-                    self.sync_index = 0;
-                    self.sync_items.clear();
-                    self.backend_sender.send(BackendMessage::SyncError(
-                        format!("Received error syncing: {:?}", e))
-                    ).unwrap();
-                }
-            }
-        }
-    }
-
-    fn sync(&mut self) -> reqwest::Result<()> {
-        // Get user_id
-        let user_id = self.bw_client.get_user_id()?;
-        println!("got user_id: {}", user_id);
-
-        // Get list of students;
-        let user_id_2 = user_id.clone();
-        let students = self.bw_client.get_students(user_id_2)?;
-
-        // Sync each student
-        for student in students {
-            self.sync_student(student)?;
-        }
-
-        Ok(())
-    }
-
-    fn sync_student(&mut self, student: Student) -> reqwest::Result<()> {
-        println!("sync_student: {} {}", student.first_name, student.last_name);
-        self.enqueue_sync_items(&student)?;
-
-        println!("...done");
-
-        Ok(())
-    }
-
-    fn enqueue_sync_items(&mut self, student: &Student) -> reqwest::Result<()> {
-        println!("enqueue_sync_items: {} {}", student.first_name, student.last_name);
-
-        let mut page: usize = 0;
-        loop {
-            self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
-            let count = self.enqueue_sync_items_on_page(student, page)?;
-            if count == 0 {
-                break;
-            }
-            self.backend_sender.send(BackendMessage::QueriedItems {
-                page: page,
-                count: count,
-            }).unwrap();
-            page += 1;
-        }
-
-        Ok(())
-    }
-
-    fn enqueue_sync_items_on_page(&mut self, student: &Student, page: usize) -> reqwest::Result<usize> {
-        let response = self.bw_client.get_students_activities(
-            student.object_id.clone(), Self::PAGE_SIZE, page
-        )?;
-        let response_json = response.json::<Value>()?;
-        let response_obj = response_json.as_object().unwrap();
-        println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
-
-        let page = response_obj.get("page").unwrap().as_u64().unwrap() as usize;
-        let page_size = response_obj.get("page_size").unwrap().as_u64().unwrap() as usize;
-        println!("page, page_size: {}, {}", page, page_size);
-
-        let activities = response_obj.get("activities").unwrap().as_array().unwrap();
-        println!("# activities: {}", activities.len());
-
-        let mut count: usize = 0;
-        for activity in activities {
-            if let Some(item) = self.get_sync_item_for_activity(student, activity.as_object().unwrap()) {
-                self.sync_items.push(item);
-                count += 1;
             }
         }
 
-        Ok(count)
     }
 
-    fn get_sync_item_for_activity(&mut self, student: &Student, activity: &Map<String, Value>) -> Option<SyncItem> {
-        let timestamp = get_created_at(activity);
-        let object_id = get_object_id(activity);
-
-        let url_ext_opt: Option<(_, String)> = if activity.get("media").unwrap().is_object() {
-            let photo_info = activity.get("media").unwrap().as_object().unwrap();
-            let url = reqwest::Url::parse(photo_info.get("image_url").unwrap().as_str().unwrap()).unwrap();
-            Some((url, "jpg".into()))
-        }
-        else if activity.get("video_info").unwrap().is_object() {
-            let video_info = activity.get("video_info").unwrap().as_object().unwrap();
-            let url = reqwest::Url::parse(video_info.get("downloadable_url").unwrap().as_str().unwrap()).unwrap();
-            Some((url, "mp4".into()))
-        }
-        else {
-            None
-        };
-
-        url_ext_opt.map(|(url, extension)| {
-            SyncItem {
-                student: student.clone(),
-                timestamp,
-                url,
-                object_id,
-                extension,
-            }
-        })
-    }
-
-    fn sync_next_item(&mut self) -> reqwest::Result<bool> {
-        // println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
-
-        if self.sync_index < self.sync_items.len() {
-            let item = &self.sync_items[self.sync_index];
-
-            let student_path = create_student_path(&self.output_root, &item.student);
-            let month_path = create_month_path(&student_path, &item.timestamp);
-            let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
-            let dst_path = month_path.join(filename.clone());
-
-            println!("{:?}", dst_path);
-            let needs_download = !dst_path.exists();
-            self.backend_sender.send(BackendMessage::ProcessingItem {
-                needs_download,
-                path: dst_path.clone(),
-                index: self.sync_index,
-                count: self.sync_items.len(),
-            }).unwrap();
-            if needs_download {
-                let dst_path_tmp = temp_dir(&self.app).join(filename);
-                self.bw_client.download_file(&item.url, &dst_path_tmp)?;
-                println!("Renaming {:?} to {:?}", dst_path_tmp, dst_path);
-                fs::copy(dst_path_tmp.clone(), dst_path.clone()).unwrap();
-                fs::remove_file(dst_path_tmp).unwrap();
-
-                // Modify system creation/modification time
-                let _ = fs::File::open(&dst_path).unwrap().set_modified(
-                    SystemTime::UNIX_EPOCH + Duration::from_nanos(item.timestamp.timestamp().as_nanosecond().try_into().unwrap())
-                );
-            }
-
-            if needs_download || should_update_all_metadata(&self.app) {
-                // Add GPS coordinates and date/time to metadata
-                let output: Vec<String> = self.exif_tool.execute_lines(&[
-                    "-overwrite_original", "-alldates<filename",
-                    &format!("-gpsposition={}", get_gps_coords(&self.app)),
-                    dst_path.to_str().unwrap()
-                ]).unwrap();
-                for line in output {
-                    println!("{}", line);
-                }
-            }
-
-            self.sync_index += 1;
-            if self.sync_index == self.sync_items.len() {
-                self.sync_index = 0;
-                self.sync_items.clear();
-                self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
-            }
-
-            Ok(true)
-        }
-        else {
-            Ok(false)
-        }
-    }
-
-    fn log_to_frontend(&self, msg: String) {
-        self.backend_sender.send(BackendMessage::LogToFrontend(msg)).unwrap();
-    }
+    // fn run(&mut self) {
+    //     loop {
+    //         match self.sync_next_item() {
+    //             Ok(synced) => {
+    //                 if synced {
+    //                     match self.io_receiver.try_recv() {
+    //                         Ok(msg) => {
+    //                             match msg {
+    //                                 IOMessage::Sync => {
+    //                                     println!("Should not receive sync message while downloading");
+    //                                 },
+    //                                 IOMessage::Cancel => {
+    //                                     self.sync_index = 0;
+    //                                     self.sync_items.clear();
+    //                                     self.backend_sender.send(BackendMessage::SyncCanceled).unwrap();
+    //                                 },
+    //                             }
+    //                         },
+    //                         Err(e) => {
+    //                             match e {
+    //                                 std::sync::mpsc::TryRecvError::Empty => { },
+    //                                 std::sync::mpsc::TryRecvError::Disconnected => {
+    //                                     panic!("Should never get disconnected from IOService channel");
+    //                                 },
+    //                             }
+    //                         },
+    //                     }
+    //                 }
+    //                 else {
+    //                     match self.io_receiver.recv().unwrap() {
+    //                         IOMessage::Sync => {
+    //                             if let Err(e) = self.sync() {
+    //                                 self.sync_index = 0;
+    //                                 self.sync_items.clear();
+    //                                 self.backend_sender.send(BackendMessage::SyncError(
+    //                                     format!("Received error syncing: {:?}", e))
+    //                                 ).unwrap();
+    //                             }
+    //                         },
+    //                         IOMessage::Cancel => {
+    //                             println!("Nothing to cancel");
+    //                         },
+    //                     }
+    //                 }
+    //             },
+    //             Err(e) => {
+    //                 self.sync_index = 0;
+    //                 self.sync_items.clear();
+    //                 self.backend_sender.send(BackendMessage::SyncError(
+    //                     format!("Received error syncing: {:?}", e))
+    //                 ).unwrap();
+    //             }
+    //         }
+    //     }
+    // }
+    //
+    // fn sync(&mut self) -> reqwest::Result<()> {
+    //     // Get user_id
+    //     let user_id = self.bw_client.get_user_id()?;
+    //     println!("got user_id: {}", user_id);
+    //
+    //     // Get list of students;
+    //     let user_id_2 = user_id.clone();
+    //     let students = self.bw_client.get_students(user_id_2)?;
+    //
+    //     // Sync each student
+    //     for student in students {
+    //         self.sync_student(student)?;
+    //     }
+    //
+    //     Ok(())
+    // }
+    //
+    // fn sync_student(&mut self, student: Student) -> reqwest::Result<()> {
+    //     println!("sync_student: {} {}", student.first_name, student.last_name);
+    //     self.enqueue_sync_items(&student)?;
+    //
+    //     println!("...done");
+    //
+    //     Ok(())
+    // }
+    //
+    // fn enqueue_sync_items(&mut self, student: &Student) -> reqwest::Result<()> {
+    //     println!("enqueue_sync_items: {} {}", student.first_name, student.last_name);
+    //
+    //     let mut page: usize = 0;
+    //     loop {
+    //         self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
+    //         let count = self.enqueue_sync_items_on_page(student, page)?;
+    //         if count == 0 {
+    //             break;
+    //         }
+    //         self.backend_sender.send(BackendMessage::QueriedItems {
+    //             page: page,
+    //             count: count,
+    //         }).unwrap();
+    //         page += 1;
+    //     }
+    //
+    //     Ok(())
+    // }
+    //
+    // fn enqueue_sync_items_on_page(&mut self, student: &Student, page: usize) -> reqwest::Result<usize> {
+    //     let response = self.bw_client.get_students_activities(
+    //         student.object_id.clone(), Self::PAGE_SIZE, page
+    //     )?;
+    //     let response_json = response.json::<Value>()?;
+    //     let response_obj = response_json.as_object().unwrap();
+    //     println!("response keys: {:?}", Vec::from_iter(response_obj.keys().into_iter()));
+    //
+    //     let page = response_obj.get("page").unwrap().as_u64().unwrap() as usize;
+    //     let page_size = response_obj.get("page_size").unwrap().as_u64().unwrap() as usize;
+    //     println!("page, page_size: {}, {}", page, page_size);
+    //
+    //     let activities = response_obj.get("activities").unwrap().as_array().unwrap();
+    //     println!("# activities: {}", activities.len());
+    //
+    //     let mut count: usize = 0;
+    //     for activity in activities {
+    //         if let Some(item) = self.get_sync_item_for_activity(student, activity.as_object().unwrap()) {
+    //             self.sync_items.push(item);
+    //             count += 1;
+    //         }
+    //     }
+    //
+    //     Ok(count)
+    // }
+    //
+    // fn get_sync_item_for_activity(&mut self, student: &Student, activity: &Map<String, Value>) -> Option<SyncItem> {
+    //     let timestamp = get_created_at(activity);
+    //     let object_id = get_object_id(activity);
+    //
+    //     let url_ext_opt: Option<(_, String)> = if activity.get("media").unwrap().is_object() {
+    //         let photo_info = activity.get("media").unwrap().as_object().unwrap();
+    //         let url = reqwest::Url::parse(photo_info.get("image_url").unwrap().as_str().unwrap()).unwrap();
+    //         Some((url, "jpg".into()))
+    //     }
+    //     else if activity.get("video_info").unwrap().is_object() {
+    //         let video_info = activity.get("video_info").unwrap().as_object().unwrap();
+    //         let url = reqwest::Url::parse(video_info.get("downloadable_url").unwrap().as_str().unwrap()).unwrap();
+    //         Some((url, "mp4".into()))
+    //     }
+    //     else {
+    //         None
+    //     };
+    //
+    //     url_ext_opt.map(|(url, extension)| {
+    //         SyncItem {
+    //             student: student.clone(),
+    //             timestamp,
+    //             url,
+    //             object_id,
+    //             extension,
+    //         }
+    //     })
+    // }
+    //
+    // fn sync_next_item(&mut self) -> reqwest::Result<bool> {
+    //     // println!("todo: download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
+    //
+    //     if self.sync_index < self.sync_items.len() {
+    //         let item = &self.sync_items[self.sync_index];
+    //
+    //         let student_path = create_student_path(&self.output_root, &item.student);
+    //         let month_path = create_month_path(&student_path, &item.timestamp);
+    //         let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
+    //         let dst_path = month_path.join(filename.clone());
+    //
+    //         println!("{:?}", dst_path);
+    //         let needs_download = !dst_path.exists();
+    //         self.backend_sender.send(BackendMessage::ProcessingItem {
+    //             needs_download,
+    //             path: dst_path.clone(),
+    //             index: self.sync_index,
+    //             count: self.sync_items.len(),
+    //         }).unwrap();
+    //         if needs_download {
+    //             let dst_path_tmp = temp_dir(&self.app).join(filename);
+    //             self.bw_client.download_file(&item.url, &dst_path_tmp)?;
+    //             println!("Renaming {:?} to {:?}", dst_path_tmp, dst_path);
+    //             fs::copy(dst_path_tmp.clone(), dst_path.clone()).unwrap();
+    //             fs::remove_file(dst_path_tmp).unwrap();
+    //
+    //             // Modify system creation/modification time
+    //             let _ = fs::File::open(&dst_path).unwrap().set_modified(
+    //                 SystemTime::UNIX_EPOCH + Duration::from_nanos(item.timestamp.timestamp().as_nanosecond().try_into().unwrap())
+    //             );
+    //         }
+    //
+    //         if needs_download || should_update_all_metadata(&self.app) {
+    //             // Add GPS coordinates and date/time to metadata
+    //             let output: Vec<String> = self.exif_tool.execute_lines(&[
+    //                 "-overwrite_original", "-alldates<filename",
+    //                 &format!("-gpsposition={}", get_gps_coords(&self.app)),
+    //                 dst_path.to_str().unwrap()
+    //             ]).unwrap();
+    //             for line in output {
+    //                 println!("{}", line);
+    //             }
+    //         }
+    //
+    //         self.sync_index += 1;
+    //         if self.sync_index == self.sync_items.len() {
+    //             self.sync_index = 0;
+    //             self.sync_items.clear();
+    //             self.backend_sender.send(BackendMessage::SyncComplete).unwrap();
+    //         }
+    //
+    //         Ok(true)
+    //     }
+    //     else {
+    //         Ok(false)
+    //     }
+    // }
+    //
+    // fn log_to_frontend(&self, msg: String) {
+    //     self.backend_sender.send(BackendMessage::LogToFrontend(msg)).unwrap();
+    // }
 }
 
 fn sync(state: BackendState, io_sender: &IOSender) -> BackendState {
@@ -614,22 +693,27 @@ fn sync_error(state: BackendState) -> BackendState {
     }
 }
 
-fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, cookies: &Vec<Cookie>) -> BackendState {
-    let mut logged_in = false;
-    for cookie in cookies {
-        println!("cookie: {:?}", cookie);
-        if cookie.name().eq_ignore_ascii_case("_brightwheel_v2") {
-            logged_in = true;
-        }
-    }
-
-    match state {
-        BackendState::LoggedOut(logged_out_state) => {
-            BackendState::LoggedIn(LoggedInState { })
-        },
-        _ => state
-    }
-}
+// fn update_login_state_from_cookies(app: &AppHandle, state: BackendState, cookies: &Vec<Cookie>) -> BackendState {
+//     let mut logged_in = false;
+//     for cookie in cookies {
+//         println!("cookie: {:?}", cookie);
+//         if cookie.name().eq_ignore_ascii_case("_brightwheel_v2") {
+//             logged_in = true;
+//         }
+//     }
+//
+//     if logged_in {
+//         match state {
+//             BackendState::LoggedOut(_) => {
+//                 BackendState::LoggedIn(LoggedInState { })
+//             },
+//             _ => state
+//         }
+//     }
+//     else {
+//         BackendState::LoggedOut(LoggedOutState { })
+//     }
+// }
 
 impl LoggedOutState {
     fn log_in(self) -> BackendState {
@@ -639,14 +723,14 @@ impl LoggedOutState {
 
 impl LoggedInState {
     fn sync(self, io_sender: &IOSender) -> BackendState {
-        io_sender.send(IOMessage::Sync).unwrap();
+        // io_sender.send(IOMessage::Sync).unwrap();
         BackendState::Syncing(SyncingState { })
     }
 }
 
 impl SyncingState {
     fn cancel_sync(self, io_sender: &IOSender) -> BackendState {
-        io_sender.send(IOMessage::Cancel).unwrap();
+        // io_sender.send(IOMessage::Cancel).unwrap();
         BackendState::SyncCanceling(SyncCancelingState { })
     }
 

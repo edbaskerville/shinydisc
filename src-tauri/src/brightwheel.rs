@@ -39,6 +39,21 @@ impl BrightwheelClient {
         }
     }
 
+    pub fn get_login_test(&self) -> reqwest::Result<bool> {
+        self.get_users_me().map(|response| {
+            match response.json::<Value>() {
+                Ok(json) => {
+                    println!("json: {:?}", json);
+                    false
+                },
+                Err(e) => {
+                    println!("get_login_test json parse err: {:?}", e);
+                    false
+                }
+            }
+        })
+    }
+
     pub fn get_users_me(&self) -> reqwest::Result<Response> {
         let request = self.client.get(format!("{}/users/me", *API_URL_BASE)).build().unwrap();
         self.client.execute(request)

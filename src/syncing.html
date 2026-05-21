@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>shinydisc | Logged In</title>
+    <script type="module" src="/main.js"></script>
+
+    <script type="module">
+      /**
+        Set whether all files should have metadata (GPS coordinates) updated.
+      */
+      function setUpdateAllMetadata() {
+        sendBackendMessage({
+          "SetUpdateAllMetadata" : Boolean(metadataCheckboxEl.checked)
+        });
+      }
+
+      /**
+        Set GPS coordinates to embed in photos and videos.
+
+        This obviously ignores the fact that many photos are from field trips; those can be modified by parents as they desire in whatever tool they like.
+      */
+      function setGPSCoords() {
+        sendBackendMessage({
+          "SetGPSCoords" : gpsCoordsEl.value
+        });
+      }
+
+      /**
+        Choose output path using the system file chooser.
+      */
+      async function chooseOutputPath() {
+        const output_dir = await tauri.dialog.open({
+          multiple: false,
+          directory: true,
+          defaultPath: state.output_dir,
+        });
+        if(output_dir) {
+          sendBackendMessage({
+            "SetOutputDir" : output_dir
+          });
+        }
+      }
+
+      /*
+        Listen to sync update messages.
+      */
+      listen('sync-message', (event) => {
+        console.log(
+          "got sync-message", event.payload
+        );
+        // state = event.payload;
+        // updateViewFromState();
+      });
+    </script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>shinydisc</h1>
+      <p class="row">
+        Syncing...
+      </p>
+      <p class="row">
+        <button type="submit" id="cancel-sync-btn" onmouseup="cancelSync();">Cancel Sync</button>
+      </p>
+      <p class="row" id="sync-msg-p">
+      </p>
+    </main>
+  </body>
+</html>
+
