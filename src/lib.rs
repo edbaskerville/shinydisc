@@ -1,13 +1,13 @@
 
 pub mod brightwheel;
 
-use std::{fs, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, SystemTime}};
+use std::{path::PathBuf, str::FromStr, sync::Arc, time::{Duration}};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Builder, Emitter, Manager, Url, webview::{WebviewWindowBuilder}, utils::config::WebviewUrl};
+use tauri::{AppHandle, Builder, Emitter, Manager, Url};
 
 use exiftool::ExifTool;
 
@@ -16,14 +16,14 @@ use crate::brightwheel::{BrightwheelClient, Student};
 type BackendReceiver = std::sync::mpsc::Receiver<BackendMessage>;
 type BackendSender = std::sync::mpsc::Sender<BackendMessage>;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct FrontendState {
-    message: Option<String>,
-    output_dir: String,
-    update_all_metadata: bool,
-    gps_coords: String,
-    backend_state: BackendState,
-}
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// struct FrontendState {
+//     message: Option<String>,
+//     output_dir: String,
+//     update_all_metadata: bool,
+//     gps_coords: String,
+//     backend_state: BackendState,
+// }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum BackendState {
@@ -55,8 +55,7 @@ struct SyncCancelingState {
 enum BackendMessage {
     Test,
     LoginTestFinished(bool),
-    // OnBrightwheelNavigation(Url),
-    DOMContentLoaded,
+    IndexDOMContentLoaded,
     SetOutputDir(String),
     SetUpdateAllMetadata(bool),
     SetGPSCoords(String),
@@ -96,7 +95,8 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![send_backend_message]).build(
+        .invoke_handler(tauri::generate_handler![send_backend_message, get_config_tauri])
+        .build(
             tauri::generate_context!()
         )
         .expect("error while building tauri application");
@@ -167,11 +167,11 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 if logged_in {
                     state = match state {
                         BackendState::LoggedOut(_) => {
-                            navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
+                            log_in(&app, &base_url_opt);
                             BackendState::LoggedIn(LoggedInState {  })
                         },
                         BackendState::LoggingIn => {
-                            navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
+                            log_in(&app, &base_url_opt);
                             BackendState::LoggedIn(LoggedInState { })
                         },
                         _ => state,
@@ -206,7 +206,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             //     // update_cookies(&cookie_store_arc_mutex, cookies);
             //     None
             // },
-            BackendMessage::DOMContentLoaded => {
+            BackendMessage::IndexDOMContentLoaded => {
                 if base_url_opt.is_none() {
                     base_url_opt = Some(app.get_webview_window("main").unwrap().url().unwrap());
                     update_cookies(&app, &cookie_store_arc_mutex);
@@ -294,6 +294,17 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
 fn send_backend_message(sender: tauri::State<'_, BackendSender>, message: BackendMessage) -> Result<(), String> {
   sender.send(message).unwrap();
   Ok(())
+}
+
+#[tauri::command]
+fn get_config_tauri(app: AppHandle) -> Config {
+    get_config(&app)
+}
+
+/*** NAVIGATION ***/
+
+fn log_in(app: &AppHandle, base_url_opt: &Option<Url>) {
+    navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
 }
 
 
@@ -843,15 +854,13 @@ fn get_config(app: &AppHandle) -> Config {
         serde_json::from_reader(file).unwrap()
     }
     else {
-        Config {
-            output_dir: None,
-            update_all_metadata: None,
-            gps_coords: None,
-        }
+        let config = Config::new(app);
+        write_config(app, &config);
+        config
     }
 }
 
-fn write_config(app: &AppHandle, config: Config) {
+fn write_config(app: &AppHandle, config: &Config) {
     let config_path = config_path(app);
     println!("config_path: {:?}", config_path);
     let file = std::fs::File::options()
@@ -859,25 +868,25 @@ fn write_config(app: &AppHandle, config: Config) {
         .truncate(true)
         .write(true)
         .open(&config_path).unwrap();
-    serde_json::to_writer(file, &config).unwrap();
+    serde_json::to_writer(file, config).unwrap();
 }
 
 fn set_output_dir(app: &AppHandle, output_dir: PathBuf) {
     let mut config = get_config(app);
-    config.output_dir = Some(output_dir);
-    write_config(app, config);
+    config.output_dir = output_dir;
+    write_config(app, &config);
 }
 
 fn set_update_all_metadata(app: &AppHandle, update_all_metdata: bool) {
     let mut config = get_config(app);
-    config.update_all_metadata = Some(update_all_metdata);
-    write_config(app, config);
+    config.update_all_metadata = update_all_metdata;
+    write_config(app, &config);
 }
 
 fn set_gps_coords(app: &AppHandle, gps_coords: String) {
     let mut config = get_config(app);
-    config.gps_coords = Some(gps_coords);
-    write_config(app, config);
+    config.gps_coords = gps_coords;
+    write_config(app, &config);
 }
 
 fn cookies_path(app: &AppHandle) -> PathBuf {
@@ -886,37 +895,31 @@ fn cookies_path(app: &AppHandle) -> PathBuf {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Config {
-    output_dir: Option<PathBuf>,
-    update_all_metadata: Option<bool>,
-    gps_coords: Option<String>,
+    output_dir: PathBuf,
+    update_all_metadata: bool,
+    gps_coords: String,
 }
 
 impl Config {
-    fn get_output_dir(&self, app: &AppHandle) -> PathBuf {
-        self.output_dir.clone().unwrap_or(
-            app.path().picture_dir().unwrap().join("shinydisc")
-        )
-    }
-
-    fn should_update_all_metadata(&self) -> bool {
-        self.update_all_metadata.unwrap_or(false)
-    }
-
-    fn get_gps_coords(&self) -> String {
-        self.gps_coords.clone().unwrap_or("37.78401, -122.50331".into())
+    fn new(app: &AppHandle) -> Self {
+        Self {
+            output_dir: app.path().picture_dir().unwrap().join("shinydisc"),
+            update_all_metadata: false,
+            gps_coords: "37.78401, -122.50331".into()
+        }
     }
 }
 
 fn should_update_all_metadata(app: &AppHandle) -> bool {
-    get_config(app).should_update_all_metadata()
+    get_config(app).update_all_metadata
 }
 
 fn get_gps_coords(app: &AppHandle) -> String {
-    get_config(app).get_gps_coords()
+    get_config(app).gps_coords
 }
 
 fn get_output_dir(app: &AppHandle) -> PathBuf {
-    get_config(app).get_output_dir(app)
+    get_config(app).output_dir
 }
 
 fn remove_cookies(app: &AppHandle, cookie_store_arc_mutex: &Arc<CookieStoreMutex>) {

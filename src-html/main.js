@@ -29,10 +29,12 @@ const tauri = window.__TAURI__;
 
 /** Send a message to the backend as JSON to be deserialized into the Rust enum BackendMessage. */
 function sendBackendMessage(message) {
-  console.log("Sending backend message");
+  console.log("Sending backend message", message);
   invoke("send_backend_message", {
     "message" : message
-  });
+  }).then(result => {
+    console.log("result of backend message: ", result);
+  })
 }
 
 // /**
@@ -132,37 +134,4 @@ function sendBackendMessage(message) {
 //   }
 // }
 
-window.addEventListener("DOMContentLoaded", () => {
-  sendBackendMessage({DOMContentLoaded: null});
 
-  // messageEl = document.querySelector("#message-p");
-  // outputDirEl = document.querySelector("#output-dir-p");
-  // metadataCheckboxEl = document.querySelector("#metadata-checkbox");
-  // gpsCoordsEl = document.querySelector("#gps-input");
-  // cancelSyncBtn = document.getElementById("cancel-sync-btn");
-  // // logOutBtn = document.getElementById("log-out-btn");
-  // console.log(cancelSyncBtn);
-
-  // metadataCheckboxEl.addEventListener("input", (e) => {
-  //   setUpdateAllMetadata();
-  // });
-
-  // gpsCoordsEl.addEventListener("input", (e) => {
-  //   setGPSCoords();
-  // });
-
-  // document.querySelector("#choose-folder-button").addEventListener("click", (e) => {
-  //   e.preventDefault();
-  //   chooseOutputPath();
-  // });
-  //
-  // document.querySelector("#loggedin-form").addEventListener("submit", (e) => {
-  //   e.preventDefault();
-  //   sendBackendMessage({Sync: null});
-  // });
-  //
-  // document.querySelector("#syncing-form").addEventListener("submit", (e) => {
-  //   e.preventDefault();
-  //   sendBackendMessage({CancelSync: null});
-  // });
-});

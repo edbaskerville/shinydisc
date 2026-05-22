@@ -5,11 +5,11 @@
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Logged Out</title>
-    <script type="module" src="/main.js"></script>
-    <script type="module">
-      import { setTab, sendBackendMessage } from "./main.js";
-      window.setTab = setTab;
-      window.sendBackendMessage = sendBackendMessage;
+    <script src="/main.js"></script>
+    <script>
+      window.addEventListener("DOMContentLoaded", () => {
+        sendBackendMessage({IndexDOMContentLoaded: null});
+      });
     </script>
   </head>
 

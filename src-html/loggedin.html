@@ -32,20 +32,42 @@
         Choose output path using the system file chooser.
       */
       async function chooseOutputPath() {
+        let outputDirEl = document.querySelector("#output-dir-p");
         const output_dir = await tauri.dialog.open({
           multiple: false,
           directory: true,
           defaultPath: outputDirEl.innerText,
         });
         if(output_dir) {
-          let outputDirEl = document.querySelector("#output-dir-p");
           outputDirEl.innerText = output_dir;
+          sendBackendMessage({SetOutputDir : output_dir});
         }
       }
 
-      window.logOut = function() {
+      function setUpdateAllMetadata() {
+        sendBackendMessage({SetUpdateAllMetadata : document.querySelector("#metadata-checkbox").checked});
+      }
+
+      function setGPSCoords() {
+        sendBackendMessage({SetGPSCoords : document.querySelector("#gps-input").value});
+      }
+
+      function logOut() {
         sendBackendMessage({"LogOut" : null});
       }
+
+      function updateConfig() {
+        invoke("get_config_tauri").then(config => {
+          console.log("Got config", config);
+          document.querySelector("#output-dir-p").innerText = config.output_dir;
+          document.querySelector("#gps-input").value = config.gps_coords;
+          document.querySelector("#metadata-checkbox").checked = config.update_all_metadata;
+        });
+      }
+
+      window.addEventListener("DOMContentLoaded", () => {
+        updateConfig();
+      });
     </script>
   </head>
 
@@ -58,10 +80,10 @@
       <p class="row" id="output-dir-p">
       </p>
       <p class="row">
-        <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps"></input>
+        <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps" oninput="setGPSCoords();"></input>
       </p>
       <p class="row">
-        <input type="checkbox" id="metadata-checkbox">Update GPS coords for all files</input>
+        <input type="checkbox" id="metadata-checkbox" onchange="setUpdateAllMetadata();">Update GPS coords for all files</input>
       </p>
       <p class="row">
         <button id="sync" type="button" onmouseup="sync();">Sync</button>
