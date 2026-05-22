@@ -56,6 +56,10 @@
         sendBackendMessage({"LogOut" : null});
       }
 
+      function sync() {
+        sendBackendMessage({"Sync" : null});
+      }
+
       function updateConfig() {
         invoke("get_config_tauri").then(config => {
           console.log("Got config", config);

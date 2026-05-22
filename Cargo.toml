@@ -27,7 +27,7 @@ reqwest = { version = "0.13", features = ["json", "cookies", "blocking", "query"
 map-macro = "0.3.0"
 cookie_store = { version = "0.22" }
 reqwest_cookie_store = { version = "0.10.0" }
-jiff = "0.2"
+jiff = { version = "0.2", features = ["serde"] }
 tokio = "1"
 exiftool = "0.2"
 tauri-plugin-dialog = "2"
