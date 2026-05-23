@@ -1,7 +1,7 @@
 
 pub mod brightwheel;
 
-use std::{path::PathBuf, str::FromStr, sync::Arc, time::{Duration}};
+use std::{fs, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, SystemTime}};
 
 use jiff::{Timestamp, Zoned};
 use reqwest_cookie_store::CookieStoreMutex;
@@ -21,6 +21,7 @@ enum BackendState {
     LoggedOut(LoggedOutState),
     LoggingIn,
     LoggedIn(LoggedInState),
+    SyncQuerying,
     Syncing(SyncingState),
     SyncCanceling(SyncCancelingState),
 }
@@ -35,8 +36,8 @@ struct LoggedInState {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct SyncingState {
-    // sync_index: usize,
-    // sync_items: Vec<SyncItem>,
+    sync_index: usize,
+    sync_items: Vec<ItemToSync>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -54,25 +55,26 @@ enum BackendMessage {
     SetGPSCoords(String),
     Sync,
     LogOut,
-    GotAllSyncItems(Vec<SyncItem>),
-    QueryingItems {
-        page: usize,
-    },
-    QueriedItems {
-        page: usize,
-        count: usize,
-    },
-    ProcessingItem {
-        needs_download: bool,
-        path: PathBuf,
-        index: usize,
-        count: usize,
-    },
-    SyncComplete,
-    SyncError(String),
+    GotAllSyncItems(Vec<ItemToSync>),
+    SyncedItem(ItemToSync),
+    // QueryingItems {
+    //     page: usize,
+    // },
+    // QueriedItems {
+    //     page: usize,
+    //     count: usize,
+    // },
+    // ProcessingItem {
+    //     needs_download: bool,
+    //     path: PathBuf,
+    //     index: usize,
+    //     count: usize,
+    // },
+    // SyncComplete,
+    // SyncError(String),
     CancelSync,
-    SyncCanceled,
-    LogToFrontend(String),
+    // SyncCanceled,
+    // LogToFrontend(String),
     Exit
 }
 
@@ -200,7 +202,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                     io_sender.send(IOMessage::TestLogin).unwrap();
 
                 }
-                log_to_frontend(&app, format!("received notification of DOMContentLoaded on backend"));
+                println!("received notification of DOMContentLoaded on backend");
                 None
             },
             BackendMessage::SetOutputDir(output_dir) => {
@@ -227,48 +229,94 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             },
             BackendMessage::GotAllSyncItems(sync_items) => {
                 println!("Got {} sync items", sync_items.len());
-                None
-            },
-            BackendMessage::QueryingItems { page } => {
-                Some(format!("Querying items from page {}", page + 1))
-            },
-            BackendMessage::QueriedItems { page, count } => {
-                Some(format!("Query found {} items on page {}", count, page + 1))
-            },
-            BackendMessage::ProcessingItem {
-                needs_download,
-                path,
-                index,
-                count,
-            } => {
-                let base_msg = format!("{} ({}/{})", path.to_str().unwrap().to_string(), index + 1, count);
-                if needs_download {
-                    Some(base_msg)
+                if sync_items.len() > 0 {
+                    state = match state {
+                        BackendState::SyncQuerying => {
+                            io_sender.send(IOMessage::SyncItem(sync_items[0].clone())).unwrap();
+                            BackendState::Syncing(
+                                SyncingState {
+                                    sync_index: 0,
+                                    sync_items: sync_items,
+                                }
+                            )
+
+                        },
+                        _ => state
+                    };
                 }
                 else {
-                    Some(format!("{} - already downloaded", base_msg))
+                    state = match state {
+                        BackendState::SyncQuerying => {
+                            navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
+                            BackendState::LoggedIn(LoggedInState { })
+                        },
+                        _ => state
+                    }
                 }
+                None
             },
-            BackendMessage::SyncComplete => {
-                state = sync_complete(state);
-                Some("Sync complete".to_string())
+            BackendMessage::SyncedItem(synced_item) => {
+                state = match state {
+                    BackendState::Syncing(syncing_state) => {
+                        let next_index = syncing_state.sync_index + 1;
+                        if next_index < syncing_state.sync_items.len() {
+                            io_sender.send(IOMessage::SyncItem(syncing_state.sync_items[next_index].clone())).unwrap();
+                            BackendState::Syncing(
+                                SyncingState {
+                                    sync_index: next_index,
+                                    sync_items: syncing_state.sync_items,
+                                }
+                            )
+                        }
+                        else {
+                            navigate_to_local_path(&app, &base_url_opt, "loggedin.html");
+                            BackendState::LoggedIn(LoggedInState { })
+                        }
+                    },
+                    _ => state
+                };
+                None
             },
-            BackendMessage::SyncError(message) => {
-                state = sync_error(state);
-                Some(message)
-            },
+            // BackendMessage::QueryingItems { page } => {
+            //     Some(format!("Querying items from page {}", page + 1))
+            // },
+            // BackendMessage::QueriedItems { page, count } => {
+            //     Some(format!("Query found {} items on page {}", count, page + 1))
+            // },
+            // BackendMessage::ProcessingItem {
+            //     needs_download,
+            //     path,
+            //     index,
+            //     count,
+            // } => {
+            //     let base_msg = format!("{} ({}/{})", path.to_str().unwrap().to_string(), index + 1, count);
+            //     if needs_download {
+            //         Some(base_msg)
+            //     }
+            //     else {
+            //         Some(format!("{} - already downloaded", base_msg))
+            //     }
+            // },
+            // BackendMessage::SyncComplete => {
+            //     state = sync_complete(state);
+            //     Some("Sync complete".to_string())
+            // },
+            // BackendMessage::SyncError(message) => {
+            //     state = sync_error(state);
+            //     Some(message)
+            // },
             BackendMessage::CancelSync => {
                 state = cancel_sync(state, &io_sender);
                 Some("Cancelling...".to_string())
             },
-            BackendMessage::SyncCanceled => {
-                state = sync_canceled(state);
-                Some("Sync canceled.".to_string())
-            },
-            BackendMessage::LogToFrontend(msg) => {
-                log_to_frontend(&app, msg);
-                None
-            }
+            // BackendMessage::SyncCanceled => {
+            //     state = sync_canceled(state);
+            //     Some("Sync canceled.".to_string())
+            // },
+            // BackendMessage::LogToFrontend(msg) => {
+            //     log_to_frontend(&app, msg);
+            //     None
+            // }
             BackendMessage::Exit => {
                 break;
             }
@@ -312,9 +360,9 @@ fn respond_to_test_message(app: &AppHandle) {
 
 /*** FRONTEND DEBUG LOGGING ***/
 
-fn log_to_frontend(app: &AppHandle, log_msg: String) {
+/*fn log_to_frontend(app: &AppHandle, log_msg: String) {
     app.emit("log-event", log_msg).unwrap();
-}
+}*/
 
 /*** INITIATE LOGIN VIA BRIGHTWHEEL ***/
 
@@ -347,13 +395,14 @@ enum IOMessage {
     Sleep(f64),
     TestLogin,
     GetAllSyncItems,
+    SyncItem(ItemToSync),
 }
 
 type IOSender = std::sync::mpsc::Sender<IOMessage>;
 type IOReceiver = std::sync::mpsc::Receiver<IOMessage>;
 
-#[derive(Serialize, Deserialize, Clone)]
-struct SyncItem {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct ItemToSync {
     student: Student,
     timestamp: Zoned,
     url: reqwest::Url,
@@ -368,7 +417,7 @@ fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelC
 
     let mut io_service = IOService {
         output_root,
-        // app,
+        app,
         bw_client,
         io_receiver,
         backend_sender,
@@ -379,6 +428,7 @@ fn run_sync_engine(app: AppHandle, output_root: PathBuf, bw_client: BrightwheelC
 
 struct IOService {
     output_root: PathBuf,
+    app: AppHandle,
     bw_client: BrightwheelClient,
     io_receiver: IOReceiver,
     backend_sender: BackendSender,
@@ -408,12 +458,16 @@ impl IOService {
                 IOMessage::GetAllSyncItems => {
                     let sync_items = self.get_all_sync_items().unwrap();
                     self.backend_sender.send(BackendMessage::GotAllSyncItems(sync_items));
+                },
+                IOMessage::SyncItem(item) => {
+                    self.sync_item(&item);
+                    self.backend_sender.send(BackendMessage::SyncedItem(item)).unwrap();
                 }
             }
         }
     }
 
-    fn get_all_sync_items(&mut self) -> reqwest::Result<Vec<SyncItem>> {
+    fn get_all_sync_items(&mut self) -> reqwest::Result<Vec<ItemToSync>> {
         let mut sync_items = Vec::new();
         // sync_items: Vec::new()
 
@@ -434,13 +488,13 @@ impl IOService {
         Ok(sync_items)
     }
 
-    fn get_sync_items_for_student(&mut self, student: &Student) -> reqwest::Result<Vec<SyncItem>> {
+    fn get_sync_items_for_student(&mut self, student: &Student) -> reqwest::Result<Vec<ItemToSync>> {
         println!("enqueue_sync_items: {} {}", student.first_name, student.last_name);
 
         let mut sync_items = Vec::new();
         let mut page: usize = 0;
         loop {
-            self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
+            // self.backend_sender.send(BackendMessage::QueryingItems { page: page }).unwrap();
             let mut sync_items_for_page = self.get_sync_items_for_page(student, page)?;
             let count = sync_items_for_page.len();
             if count == 0 {
@@ -448,10 +502,10 @@ impl IOService {
             }
 
             sync_items.append(&mut sync_items_for_page);
-            self.backend_sender.send(BackendMessage::QueriedItems {
-                page: page,
-                count: count,
-            }).unwrap();
+            // self.backend_sender.send(BackendMessage::QueriedItems {
+            //     page: page,
+            //     count: count,
+            // }).unwrap();
             page += 1;
         }
 
@@ -459,7 +513,7 @@ impl IOService {
     }
 
 
-    fn get_sync_items_for_page(&mut self, student: &Student, page: usize) -> reqwest::Result<Vec<SyncItem>> {
+    fn get_sync_items_for_page(&mut self, student: &Student, page: usize) -> reqwest::Result<Vec<ItemToSync>> {
         let mut sync_items = Vec::new();
 
         let response = self.bw_client.get_students_activities(
@@ -476,11 +530,9 @@ impl IOService {
         let activities = response_obj.get("activities").unwrap().as_array().unwrap();
         println!("# activities: {}", activities.len());
 
-        let mut count: usize = 0;
         for activity in activities {
             if let Some(item) = self.get_sync_item_for_activity(student, activity.as_object().unwrap()) {
                 sync_items.push(item);
-                count += 1;
             }
         }
 
@@ -488,7 +540,7 @@ impl IOService {
     }
 
 
-    fn get_sync_item_for_activity(&mut self, student: &Student, activity: &Map<String, Value>) -> Option<SyncItem> {
+    fn get_sync_item_for_activity(&mut self, student: &Student, activity: &Map<String, Value>) -> Option<ItemToSync> {
         let timestamp = get_created_at(activity);
         let object_id = get_object_id(activity);
 
@@ -507,7 +559,7 @@ impl IOService {
         };
 
         url_ext_opt.map(|(url, extension)| {
-            SyncItem {
+            ItemToSync {
                 student: student.clone(),
                 timestamp,
                 url,
@@ -515,6 +567,51 @@ impl IOService {
                 extension,
             }
         })
+    }
+
+    fn sync_item(&mut self, item: &ItemToSync) -> reqwest::Result<()> {
+        println!("download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
+
+        let student_path = create_student_path(&self.output_root, &item.student);
+        let month_path = create_month_path(&student_path, &item.timestamp);
+        let filename = format_filename(&item.timestamp, &item.object_id,  &item.extension);
+        let dst_path = month_path.join(filename.clone());
+
+        println!("{:?}", dst_path);
+        let needs_download = !dst_path.exists();
+        // self.backend_sender.send(BackendMessage::ProcessingItem {
+        //     needs_download,
+        //     path: dst_path.clone(),
+        //     index: self.sync_index,
+        //     count: self.sync_items.len(),
+        // }).unwrap();
+        if needs_download {
+            let dst_path_tmp = temp_dir(&self.app).join(filename);
+            println!("Downloading to {:?}...", dst_path_tmp);
+            self.bw_client.download_file(&item.url, &dst_path_tmp)?;
+            println!("Renaming {:?} to {:?}", dst_path_tmp, dst_path);
+            fs::copy(dst_path_tmp.clone(), dst_path.clone()).unwrap();
+            fs::remove_file(dst_path_tmp).unwrap();
+
+            // Modify system creation/modification time
+            let _ = fs::File::open(&dst_path).unwrap().set_modified(
+                SystemTime::UNIX_EPOCH + Duration::from_nanos(item.timestamp.timestamp().as_nanosecond().try_into().unwrap())
+            );
+        }
+
+        if needs_download || should_update_all_metadata(&self.app) {
+            // Add GPS coordinates and date/time to metadata
+            let output: Vec<String> = self.exif_tool.execute_lines(&[
+                "-overwrite_original", "-alldates<filename",
+                &format!("-gpsposition={}", get_gps_coords(&self.app)),
+                dst_path.to_str().unwrap()
+            ]).unwrap();
+            for line in output {
+                println!("{}", line);
+            }
+        }
+
+        Ok(())
     }
 
     // fn run(&mut self) {
@@ -780,7 +877,7 @@ impl LoggedOutState {
 impl LoggedInState {
     fn sync(self, io_sender: &IOSender) -> BackendState {
         io_sender.send(IOMessage::GetAllSyncItems).unwrap();
-        BackendState::Syncing(SyncingState { })
+        BackendState::SyncQuerying
     }
 }
 
