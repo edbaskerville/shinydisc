@@ -1,13 +1,10 @@
-use std::{path::PathBuf, sync::{Arc, Mutex}, time::Duration};
+use std::{path::PathBuf, sync::{Arc}, time::Duration};
 use lazy_static::lazy_static;
 
-use reqwest::{
-    blocking::{Client, Response}, cookie::CookieStore, header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, ORIGIN, REFERER, USER_AGENT}
-};
-use tauri::{Url, webview};
-use reqwest_cookie_store::{CookieStoreMutex, RawCookieParseError};
+use reqwest::blocking::{Client, Response};
+use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 pub const BRIGHTWHEEL_URL_BASE: &str = "https://schools.mybrightwheel.com";
 lazy_static! {

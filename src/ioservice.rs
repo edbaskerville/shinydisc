@@ -1,11 +1,12 @@
-use std::{fs, path::PathBuf, str::FromStr, sync::Arc, time::{Duration, SystemTime}};
+use std::{fs, path::PathBuf, time::{Duration, SystemTime}};
 
 use exiftool::ExifTool;
 use jiff::{Timestamp, Zoned};
 use serde::{Serialize, Deserialize};
 use serde_json::{Map, Value};
 use tauri::{AppHandle, Manager};
-use crate::{BackendMessage, BackendSender, ItemToSync, brightwheel::{BrightwheelClient, Student}, get_gps_coords, should_update_all_metadata};
+use crate::{BackendMessage, BackendSender, ItemToSync, brightwheel::{BrightwheelClient, Student}};
+use crate::config::*;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum IOMessage {
@@ -51,10 +52,10 @@ impl IOService {
                 },
                 IOMessage::GetAllSyncItems => {
                     let sync_items = self.get_all_sync_items().unwrap();
-                    self.backend_sender.send(BackendMessage::GotAllSyncItems(sync_items));
+                    self.backend_sender.send(BackendMessage::GotAllSyncItems(sync_items)).unwrap();
                 },
                 IOMessage::SyncItem(item) => {
-                    self.sync_item(&item);
+                    self.sync_item(&item).unwrap();
                     self.backend_sender.send(BackendMessage::SyncedItem(item)).unwrap();
                 }
             }
