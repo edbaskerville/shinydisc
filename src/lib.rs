@@ -59,7 +59,7 @@ enum BackendMessage {
     Sync,
     LogOut,
     GotAllSyncItems(Vec<ItemToSync>),
-    SyncedItem(ItemToSync),
+    SyncedItem(PathBuf),
     // QueryingItems {
     //     page: usize,
     // },
@@ -234,6 +234,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 if sync_items.len() > 0 {
                     state = match state {
                         BackendState::SyncQuerying => {
+                            show_syncing_message(&app, "Processing items...");
                             io_sender.send(IOMessage::SyncItem(sync_items[0].clone())).unwrap();
                             BackendState::Syncing(
                                 SyncingState {
@@ -257,11 +258,15 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 }
                 None
             },
-            BackendMessage::SyncedItem(synced_item) => {
+            BackendMessage::SyncedItem(path) => {
                 state = match state {
                     BackendState::Syncing(syncing_state) => {
                         let next_index = syncing_state.sync_index + 1;
+                        show_syncing_message(&app, &format!("Processed {}/{}:<br>{}",
+                            next_index, syncing_state.sync_items.len(), path.to_str().unwrap()
+                        ));
                         if next_index < syncing_state.sync_items.len() {
+                            io_sender.send(IOMessage::Sleep(0.001)).unwrap();
                             io_sender.send(IOMessage::SyncItem(syncing_state.sync_items[next_index].clone())).unwrap();
                             BackendState::Syncing(
                                 SyncingState {
@@ -360,11 +365,11 @@ fn respond_to_test_message(app: &AppHandle) {
     }).unwrap();
 }
 
-/*** FRONTEND DEBUG LOGGING ***/
+/*** FRONTEND MESSAGES FOR USER ***/
 
-/*fn log_to_frontend(app: &AppHandle, log_msg: String) {
-    app.emit("log-event", log_msg).unwrap();
-}*/
+fn show_syncing_message(app: &AppHandle, message: &str) {
+    app.emit("sync-message", message).unwrap();
+}
 
 /*** INITIATE LOGIN VIA BRIGHTWHEEL ***/
 

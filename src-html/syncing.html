@@ -5,9 +5,9 @@
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>shinydisc | Logged In</title>
-    <script type="module" src="/main.js"></script>
+    <script src="/main.js"></script>
 
-    <script type="module">
+    <script>
       /**
         Set whether all files should have metadata (GPS coordinates) updated.
       */
@@ -51,8 +51,7 @@
         console.log(
           "got sync-message", event.payload
         );
-        // state = event.payload;
-        // updateViewFromState();
+        document.querySelector("#sync-msg-p").innerHTML = event.payload;
       });
     </script>
   </head>
@@ -67,6 +66,7 @@
         <button type="submit" id="cancel-sync-btn" onmouseup="cancelSync();">Cancel Sync</button>
       </p>
       <p class="row" id="sync-msg-p">
+        Querying Brightwheel for photos and videos...
       </p>
     </main>
   </body>

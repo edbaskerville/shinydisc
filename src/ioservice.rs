@@ -55,8 +55,8 @@ impl IOService {
                     self.backend_sender.send(BackendMessage::GotAllSyncItems(sync_items)).unwrap();
                 },
                 IOMessage::SyncItem(item) => {
-                    self.sync_item(&item).unwrap();
-                    self.backend_sender.send(BackendMessage::SyncedItem(item)).unwrap();
+                    let path = self.sync_item(&item).unwrap();
+                    self.backend_sender.send(BackendMessage::SyncedItem(path)).unwrap();
                 }
             }
         }
@@ -163,7 +163,7 @@ impl IOService {
         })
     }
 
-    fn sync_item(&mut self, item: &ItemToSync) -> reqwest::Result<()> {
+    fn sync_item(&mut self, item: &ItemToSync) -> reqwest::Result<PathBuf> {
         println!("download {} {} {} {}.{}", item.student.first_name, item.student.last_name, item.timestamp, item.object_id, item.extension);
 
         let student_path = create_student_path(&self.output_root, &item.student);
@@ -205,7 +205,7 @@ impl IOService {
             }
         }
 
-        Ok(())
+        Ok(dst_path)
     }
 }
 
