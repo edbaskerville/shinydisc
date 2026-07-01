@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>shinydisc | Error</title>
+    <script src="/main.js"></script>
+    <script>
+      function tryAgain() {
+        sendBackendMessage({TryAgain: null});
+      }
+    </script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>shinydisc</h1>
+      <p class="row">
+        Could not connect to Brightwheel.
+      </p>
+      <p class="row">
+        <button id="tryagain-button" type="button" onmouseup="tryAgain();">Try Again</button>
+      </p>
+    </main>
+  </body>
+</html>

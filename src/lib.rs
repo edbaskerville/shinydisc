@@ -27,6 +27,7 @@ enum BackendState {
     SyncQuerying,
     Syncing(SyncingState),
     SyncCanceling(SyncCancelingState),
+    Error,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -51,6 +52,8 @@ struct SyncCancelingState {
 #[derive(Serialize, Deserialize, Clone)]
 enum BackendMessage {
     Test,
+    Error,
+    TryAgain,
     LoginTestFinished(bool),
     IndexDOMContentLoaded,
     SetOutputDir(String),
@@ -160,6 +163,16 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 respond_to_test_message(&app);
                 Some("Test message".to_string())
             },
+            BackendMessage::Error => {
+                go_to_error_page(&app, &base_url_opt);
+                state = BackendState::Error;
+                None
+            },
+            BackendMessage::TryAgain => {
+                state = BackendState::LoggedOut(LoggedOutState {});
+                restart(&app, &base_url_opt);
+                None
+            },
             BackendMessage::LoginTestFinished(logged_in) => {
                 update_cookies(&app, &cookie_store_arc_mutex);
                 if logged_in {
@@ -200,10 +213,10 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
             BackendMessage::IndexDOMContentLoaded => {
                 if base_url_opt.is_none() {
                     base_url_opt = Some(app.get_webview_window("main").unwrap().url().unwrap());
-                    update_cookies(&app, &cookie_store_arc_mutex);
-                    io_sender.send(IOMessage::TestLogin).unwrap();
 
                 }
+                update_cookies(&app, &cookie_store_arc_mutex);
+                io_sender.send(IOMessage::TestLogin).unwrap();
                 println!("received notification of DOMContentLoaded on backend");
                 None
             },
@@ -346,6 +359,14 @@ fn get_config_tauri(app: AppHandle) -> Config {
 }
 
 /*** NAVIGATION ***/
+
+fn restart(app: &AppHandle, base_url_opt: &Option<Url>) {
+    navigate_to_local_path(&app, &base_url_opt, "index.html");
+}
+
+fn go_to_error_page(app: &AppHandle, base_url_opt: &Option<Url>) {
+    navigate_to_local_path(&app, &base_url_opt, "error.html");
+}
 
 fn log_in(app: &AppHandle, base_url_opt: &Option<Url>) {
     navigate_to_local_path(&app, &base_url_opt, "loggedin.html");

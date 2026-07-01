@@ -47,6 +47,7 @@ impl IOService {
                         },
                         Err(e) => {
                             println!("get_login_test() error: {:?}", e);
+                            self.backend_sender.send(BackendMessage::Error).unwrap();
                         }
                     }
                 },
