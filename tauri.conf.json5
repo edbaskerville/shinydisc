@@ -4,15 +4,17 @@
   "version": "0.1.0",
   "identifier": "com.edbaskerville.shinydisc",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "src-html"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "main",
         "title": "shinydisc",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "url": "index.html"
       }
     ],
     "security": {

@@ -1,18 +1,20 @@
 use std::{path::PathBuf, sync::{Arc}, time::Duration};
+use lazy_static::lazy_static;
 
-const URL_BASE: &str = "https://schools.mybrightwheel.com/api/v1";
-
-use reqwest::{
-    blocking::{Client, Response}, header::{HeaderMap, HeaderName, HeaderValue, CONTENT_TYPE, ORIGIN, REFERER, USER_AGENT}
-};
+use reqwest::blocking::{Client, Response};
 use reqwest_cookie_store::CookieStoreMutex;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
+
+pub const BRIGHTWHEEL_URL_BASE: &str = "https://schools.mybrightwheel.com";
+lazy_static! {
+    pub static ref API_URL_BASE: String = {
+        format!("{}/api/v1", BRIGHTWHEEL_URL_BASE)
+    };
+}
 
 pub struct BrightwheelClient {
     client: Client,
-    pub cookie_store_arc_mutex: Arc<CookieStoreMutex>,
-    auth_headers: HeaderMap,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -23,61 +25,39 @@ pub struct Student {
 }
 
 impl BrightwheelClient {
-    fn make_client(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Client{
-        Client::builder().cookie_provider(cookie_store_arc_mutex).timeout(Duration::from_secs(30)).build().unwrap()
-    }
-
-    pub fn new(cookie_store: reqwest_cookie_store::CookieStore) -> Self {
-        let cookie_store_arc_mutex = Arc::new(
-            CookieStoreMutex::new(cookie_store)
-        );
-
-        let client = Self::make_client(cookie_store_arc_mutex.clone());
-        let auth_headers = HeaderMap::from_iter(vec![
-            (CONTENT_TYPE, HeaderValue::from_str("application/json").unwrap()),
-            (
-                HeaderName::from_static("x-client-version"), 
-                HeaderValue::from_str("106").unwrap(),
-            ),
-            (
-                HeaderName::from_static("x-client-name"),
-                HeaderValue::from_str("web").unwrap(),
-            ),
-            (ORIGIN, HeaderValue::from_str("https://schools.mybrightwheel.com").unwrap()),
-            (REFERER, HeaderValue::from_str("https://schools.mybrightwheel.com/sign-in").unwrap()),
-            // (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:139.0) Gecko/20100101 Firefox/139.0").unwrap()),
-            (USER_AGENT, HeaderValue::from_str("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.7727.56 Safari/537.36").unwrap()),
-        ].into_iter());
+    pub fn new(cookie_store_arc_mutex: Arc<CookieStoreMutex>) -> Self {
+        let client = Client::builder()
+            .cookie_provider(cookie_store_arc_mutex)
+            .timeout(Duration::from_secs(30))
+            .build().unwrap();
 
         Self {
             client,
-            cookie_store_arc_mutex,
-            auth_headers,
         }
     }
 
-    pub fn post_sessions_start(&self, email: String, password: String) -> reqwest::Result<Response> {
-        let request = self.client.post(
-            format!("{}/sessions/start", URL_BASE)
-        )
-            .headers(self.auth_headers.clone())
-            .json(&Self::authentication_json(email, password, None))
-            .build().unwrap();
-        self.client.execute(request)
-    }
-
-    pub fn post_sessions(&self, email: String, password: String, mfa_code_opt: Option<String>) -> reqwest::Result<Response> {
-        let request = self.client.post(
-            format!("{}/sessions", URL_BASE)
-        )
-            .headers(self.auth_headers.clone())
-            .json(&Self::authentication_json(email, password, mfa_code_opt))
-            .build().unwrap();
-        self.client.execute(request)
+    pub fn get_login_test(&self) -> reqwest::Result<bool> {
+        self.get_users_me().map(|response| {
+            match response.json::<Value>() {
+                Ok(json) => {
+                    println!("login test json: {:?}", json);
+                    if let Some(json_obj) = json.as_object() {
+                        json_obj.contains_key("object_id")
+                    }
+                    else {
+                        false
+                    }
+                },
+                Err(e) => {
+                    println!("get_login_test json parse err: {:?}", e);
+                    false
+                }
+            }
+        })
     }
 
     pub fn get_users_me(&self) -> reqwest::Result<Response> {
-        let request = self.client.get(format!("{}/users/me", URL_BASE)).build().unwrap();
+        let request = self.client.get(format!("{}/users/me", *API_URL_BASE)).build().unwrap();
         self.client.execute(request)
     }
 
@@ -97,7 +77,7 @@ impl BrightwheelClient {
     }
 
     pub fn get_guardians_students(&self, user_id: String) -> reqwest::Result<Response> {
-        let request = self.client.get(format!("{}/guardians/{}/students", URL_BASE, user_id)).build().unwrap();
+        let request = self.client.get(format!("{}/guardians/{}/students", *API_URL_BASE, user_id)).build().unwrap();
         self.client.execute(request)
     }
 
@@ -145,25 +125,11 @@ impl BrightwheelClient {
 
     pub fn get_students_activities(&self, student_id: String, page_size: usize, page: usize) -> reqwest::Result<Response> {
         let request = self.client.get(
-            format!("{}/students/{}/activities", URL_BASE, student_id)
+            format!("{}/students/{}/activities", *API_URL_BASE, student_id)
         ).query(
             &[("page_size", page_size), ("page", page)]
         ).build().unwrap();
         self.client.execute(request)
-    }
-
-    fn authentication_json(email: String, password: String, mfa_code_opt: Option<String>) -> Value {
-        let mut json_val = json!({
-            "user" : {
-                "email" : email,
-                "password" : password
-            }
-        });
-        
-        if let Some(mfa_code) = mfa_code_opt {
-            json_val.as_object_mut().unwrap().insert("2fa_code".into(), mfa_code.into());
-        }
-        json_val
     }
 
     pub fn download_file(&self, src_url: &reqwest::Url, dst_path: &PathBuf) -> reqwest::Result<()> {
@@ -175,15 +141,5 @@ impl BrightwheelClient {
         response.copy_to(&mut file)?;
 
         Ok(())
-    }
-}
-
-impl Clone for BrightwheelClient {
-    fn clone(&self) -> Self {
-        Self {
-            client: Self::make_client(self.cookie_store_arc_mutex.clone()),
-            cookie_store_arc_mutex: self.cookie_store_arc_mutex.clone(),
-            auth_headers: self.auth_headers.clone()
-        }
     }
 }

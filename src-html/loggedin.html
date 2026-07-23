@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>shinydisc | Logged In</title>
+    <script src="/main.js"></script>
+    <script>
+      // /**
+      //   Set whether all files should have metadata (GPS coordinates) updated.
+      // */
+      // function setUpdateAllMetadata() {
+      //   let metadataCheckboxEl = document.querySelector("#metadata-checkbox");
+      //   sendBackendMessage({
+      //     "SetUpdateAllMetadata" : Boolean(metadataCheckboxEl.checked)
+      //   });
+      // }
+
+      /**
+        Set GPS coordinates to embed in photos and videos.
+
+        This obviously ignores the fact that many photos are from field trips; those can be modified by parents as they desire in whatever tool they like.
+      */
+      // function setGPSCoords() {
+      //   sendBackendMessage({
+      //     "SetGPSCoords" : gpsCoordsEl.value
+      //   });
+      // }
+
+      /**
+        Choose output path using the system file chooser.
+      */
+      async function chooseOutputPath() {
+        let outputDirEl = document.querySelector("#output-dir-p");
+        const output_dir = await tauri.dialog.open({
+          multiple: false,
+          directory: true,
+          defaultPath: outputDirEl.innerText,
+        });
+        if(output_dir) {
+          outputDirEl.innerText = output_dir;
+          sendBackendMessage({SetOutputDir : output_dir});
+        }
+      }
+
+      function setUpdateAllMetadata() {
+        sendBackendMessage({SetUpdateAllMetadata : document.querySelector("#metadata-checkbox").checked});
+      }
+
+      function setGPSCoords() {
+        sendBackendMessage({SetGPSCoords : document.querySelector("#gps-input").value});
+      }
+
+      function logOut() {
+        sendBackendMessage({"LogOut" : null});
+      }
+
+      function sync() {
+        sendBackendMessage({"Sync" : null});
+      }
+
+      function updateConfig() {
+        invoke("get_config_tauri").then(config => {
+          console.log("Got config", config);
+          document.querySelector("#output-dir-p").innerText = config.output_dir;
+          document.querySelector("#gps-input").value = config.gps_coords;
+          document.querySelector("#metadata-checkbox").checked = config.update_all_metadata;
+        });
+      }
+
+      window.addEventListener("DOMContentLoaded", () => {
+        updateConfig();
+      });
+    </script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>shinydisc</h1>
+      <p class="row">
+        <button id="choose-folder-button" type="button" onmouseup="chooseOutputPath();">Choose Folder...</button>
+      </p>
+      <p class="row" id="output-dir-p">
+      </p>
+      <p class="row">
+        <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps" oninput="setGPSCoords();"></input>
+      </p>
+      <p class="row">
+        <input type="checkbox" id="metadata-checkbox" onchange="setUpdateAllMetadata();">Update GPS coords for all files</input>
+      </p>
+      <p class="row">
+        <button id="sync" type="button" onmouseup="sync();">Sync</button>
+      </p>
+      <p class="row">
+        <button id="sync" type="button" onmouseup="logOut();">Log Out</button>
+      </p>
+    </main>
+  </body>
+</html>

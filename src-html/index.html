@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Logged Out</title>
+    <script src="/main.js"></script>
+    <script>
+      window.addEventListener("DOMContentLoaded", () => {
+        sendBackendMessage({IndexDOMContentLoaded: null});
+      });
+    </script>
+  </head>
+
+  <body>
+    <main class="container">
+      <h1>shinydisc</h1>
+      <p class="row">
+        Attempting Brightwheel sign-in...
+      </p>
+    </main>
+  </body>
+</html>
