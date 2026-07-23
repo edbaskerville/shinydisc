@@ -349,8 +349,13 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
 
 #[tauri::command]
 fn send_backend_message(sender: tauri::State<'_, BackendSender>, message: BackendMessage) -> Result<(), String> {
-  sender.send(message).unwrap();
-  Ok(())
+  match sender.send(message) {
+    Ok(()) => Ok(()),
+    Err(e) => {
+      println!("Got error sending backend message: {:?}", e);
+      panic!()
+    }
+  }
 }
 
 #[tauri::command]
