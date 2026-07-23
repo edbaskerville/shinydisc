@@ -1,3 +1,8 @@
+*~
+gen
+run
+target
+
 # Logs
 logs
 *.log
