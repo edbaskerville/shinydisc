@@ -52,12 +52,27 @@ impl IOService {
                     }
                 },
                 IOMessage::GetAllSyncItems => {
-                    let sync_items = self.get_all_sync_items().unwrap();
-                    self.backend_sender.send(BackendMessage::GotAllSyncItems(sync_items)).unwrap();
+                	match self.get_all_sync_items() {
+                		Ok(sync_items) => {
+  		        			self.backend_sender.send(BackendMessage::GotAllSyncItems(sync_items)).unwrap();
+                		},
+                		Err(e) => {
+                            println!("get_all_sync_items() error: {:?}", e);
+                            self.backend_sender.send(BackendMessage::Error).unwrap();
+                		}
+                	}
+                	
                 },
                 IOMessage::SyncItem(item) => {
-                    let path = self.sync_item(&item).unwrap();
-                    self.backend_sender.send(BackendMessage::SyncedItem(path)).unwrap();
+                	match self.sync_item(&item) {
+                		Ok(path) => {
+							self.backend_sender.send(BackendMessage::SyncedItem(path)).unwrap();
+                		},
+                		Err(e) =>  {
+                            println!("sync_item() error: {:?}", e);
+                            self.backend_sender.send(BackendMessage::Error).unwrap();
+                		}
+                	}
                 }
             }
         }

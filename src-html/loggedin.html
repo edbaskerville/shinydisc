@@ -3,31 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
+    <style>
+    	#sync-button {
+    		border: solid 3px black;
+    		font-size: 1.4em;
+    	}
+    </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>shinydisc | Logged In</title>
     <script src="/main.js"></script>
     <script>
-      // /**
-      //   Set whether all files should have metadata (GPS coordinates) updated.
-      // */
-      // function setUpdateAllMetadata() {
-      //   let metadataCheckboxEl = document.querySelector("#metadata-checkbox");
-      //   sendBackendMessage({
-      //     "SetUpdateAllMetadata" : Boolean(metadataCheckboxEl.checked)
-      //   });
-      // }
-
-      /**
-        Set GPS coordinates to embed in photos and videos.
-
-        This obviously ignores the fact that many photos are from field trips; those can be modified by parents as they desire in whatever tool they like.
-      */
-      // function setGPSCoords() {
-      //   sendBackendMessage({
-      //     "SetGPSCoords" : gpsCoordsEl.value
-      //   });
-      // }
-
       /**
         Choose output path using the system file chooser.
       */
@@ -78,22 +63,27 @@
   <body>
     <main class="container">
       <h1>shinydisc</h1>
-      <p class="row">
-        <button id="choose-folder-button" type="button" onmouseup="chooseOutputPath();">Choose Folder...</button>
+			<p>
+				Folder where your photos/videos will be stored:<br>
+				<span id="output-dir-p"></span><br>
+				<button id="choose-folder-button" type="button" onmouseup="chooseOutputPath();">Choose Folder...</button><br>
+				(Sub-folders will be created for each child.)
+			</p>
+			<hr>
+      <p>
+      	GPS coordinates for photo metadata (copy/paste from Google Maps etc.):<br>
+        <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps" oninput="setGPSCoords();"><br>
+        <label><input type="checkbox" id="metadata-checkbox" onchange="setUpdateAllMetadata();">Update GPS coords for already downloaded files</label>
       </p>
-      <p class="row" id="output-dir-p">
+			<hr>
+      <p>
+        <button id="sync-button" type="button" onmouseup="sync();">Sync All Photos and Videos</button>
       </p>
-      <p class="row">
-        <input id="gps-input" placeholder="GPS (lat., lon) - copy/paste from Google Maps" oninput="setGPSCoords();"></input>
-      </p>
-      <p class="row">
-        <input type="checkbox" id="metadata-checkbox" onchange="setUpdateAllMetadata();">Update GPS coords for all files</input>
-      </p>
-      <p class="row">
-        <button id="sync" type="button" onmouseup="sync();">Sync</button>
-      </p>
-      <p class="row">
-        <button id="sync" type="button" onmouseup="logOut();">Log Out</button>
+			<hr>
+      <p>
+      	If you want to switch accounts:<br>
+        <button id="sync" type="button" onmouseup="logOut();">Log Out</button><br>
+        (Otherwise, just quit, and your login will be remembered when you reopen the app.)
       </p>
     </main>
   </body>
