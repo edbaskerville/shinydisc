@@ -40,16 +40,16 @@
         });
         if(output_dir) {
           outputDirEl.innerText = output_dir;
-          sendBackendMessage({SetOutputDir : output_dir});
+          sendBackendMessage({"SetOutputDir" : output_dir});
         }
       }
 
       function setUpdateAllMetadata() {
-        sendBackendMessage({SetUpdateAllMetadata : document.querySelector("#metadata-checkbox").checked});
+        sendBackendMessage({"SetUpdateAllMetadata" : document.querySelector("#metadata-checkbox").checked});
       }
 
       function setGPSCoords() {
-        sendBackendMessage({SetGPSCoords : document.querySelector("#gps-input").value});
+        sendBackendMessage({"SetGPSCoords" : document.querySelector("#gps-input").value});
       }
 
       function logOut() {

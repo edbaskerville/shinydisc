@@ -29,10 +29,20 @@ fn config_path(app: &AppHandle) -> PathBuf {
 }
 
 pub fn get_config(app: &AppHandle) -> Config {
+    // TODO: fix control flow/duplication
     let config_path = config_path(app);
     if config_path.exists() {
         let file = std::fs::File::open(&config_path).unwrap();
-        serde_json::from_reader(file).unwrap()
+        match serde_json::from_reader(file) {
+            Ok(config) => config,
+            Err(e) => {
+                // Reset config if we fail to read it.
+                // Most likely scenario: using old version.
+                let config = Config::new(app);
+                write_config(app, &config);
+                config
+            }
+        }
     }
     else {
         let config = Config::new(app);

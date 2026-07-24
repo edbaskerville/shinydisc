@@ -211,6 +211,7 @@ fn run_backend(sender: BackendSender, receiver: BackendReceiver, app: AppHandle)
                 None
             },
             BackendMessage::IndexDOMContentLoaded => {
+            	println!("IndexDOMContentLoaded received");
                 if base_url_opt.is_none() {
                     base_url_opt = Some(app.get_webview_window("main").unwrap().url().unwrap());
 
